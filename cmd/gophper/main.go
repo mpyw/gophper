@@ -650,6 +650,18 @@ func extensionInstallAction(_ context.Context, cmd *cli.Command) error {
 			return err
 		}
 		fmt.Fprintln(cmd.Root().Writer, path)
+		// Such as intl's ICU data, which it reads from the same directory.
+		for _, file := range phpext.Files(name) {
+			b, err := phpext.OpenFile(name, file)
+			if err != nil {
+				return err
+			}
+			path := filepath.Join(dir, file)
+			if err := os.WriteFile(path, b, 0o644); err != nil {
+				return err
+			}
+			fmt.Fprintln(cmd.Root().Writer, path)
+		}
 	}
 	return nil
 }

@@ -27,6 +27,15 @@ func newExtensionEngine(t *testing.T) *gophper.Engine {
 		if err := os.WriteFile(filepath.Join(dir, name+".so"), so, 0o644); err != nil {
 			t.Fatal(err)
 		}
+		for _, file := range phpext.Files(name) {
+			b, err := phpext.OpenFile(name, file)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, file), b, 0o644); err != nil {
+				t.Fatal(err)
+			}
+		}
 	}
 	cfg := gophper.DefaultEngineConfig()
 	cfg.ExtensionDir = dir
@@ -115,5 +124,16 @@ func TestExtensionBundled(t *testing.T) {
 				t.Errorf("exit %d\n%s", code, out)
 			}
 		})
+	}
+}
+
+// TestExtensionIntl formats with ICU and its data, which comes beside intl.so.
+func TestExtensionIntl(t *testing.T) {
+	out, code := runExtension(t, newExtensionEngine(t), "-d", "extension=intl", "-r", `
+		echo (new NumberFormatter("de_DE", NumberFormatter::CURRENCY))->formatCurrency(1234.5, "EUR"), "\n";
+		echo MessageFormatter::formatMessage("en_US", "{0, plural, one{# file} other{# files}}", [3]), "\n";
+		echo Normalizer::normalize("e\u{301}") === "\u{e9}" ? "normalized" : "not normalized", "\n";`)
+	if want := "1.234,50\u00a0€\n3 files\nnormalized\n"; code != 0 || out != want {
+		t.Errorf("exit %d\n%q", code, out)
 	}
 }

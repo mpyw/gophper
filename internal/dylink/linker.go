@@ -101,12 +101,22 @@ func (l *Linker) Open(ctx context.Context, main api.Module, bin []byte) (int32, 
 	env := &wasmbin.Builder{}
 	gotMem := &wasmbin.Builder{}
 	gotFunc := &wasmbin.Builder{}
-	var mainFuncs, ownFuncs []string
+	var mainFuncs, ownFuncs, selfFuncs []string
+	// Definitions in env come after every import: wasm numbers imports
+	// first, so a definition's index is final only then.
+	var envDefs []func()
 	for _, imp := range info.Imports {
 		switch imp.Module {
 		case "env":
-			if err := l.linkEnv(env, imp, main, memBase, tableBase); err != nil {
+			def, self, err := l.linkEnv(env, imp, main, memBase, tableBase)
+			if err != nil {
 				return 0, err
+			}
+			if def != nil {
+				envDefs = append(envDefs, def)
+			}
+			if self {
+				selfFuncs = append(selfFuncs, imp.Name)
 			}
 		case "GOT.mem":
 			addr, ok := l.dataAddress(main, imp.Name)
@@ -132,6 +142,25 @@ func (l *Linker) Open(ctx context.Context, main api.Module, bin []byte) (int32, 
 		}
 	}
 
+	for _, def := range envDefs {
+		def()
+	}
+	if len(selfFuncs) > 0 {
+		types := map[string]api.FunctionDefinition{}
+		for _, f := range side.mod.ImportedFunctions() {
+			if module, name, _ := f.Import(); module == "env" {
+				types[name] = f
+			}
+		}
+		env.ImportTable("main", "__indirect_function_table")
+		for _, name := range selfFuncs {
+			f := types[name]
+			slot := env.DefineGlobal(true, 0)
+			env.Export(name, wasmbin.KindFunc, env.DefineTrampoline(f.ParamTypes(), f.ResultTypes(), slot))
+			env.Export(linkerSlotPrefix+name, wasmbin.KindGlobal, slot)
+		}
+	}
+
 	glue := map[string]api.Module{"main": main}
 	for name, b := range map[string]*wasmbin.Builder{"env": env, "GOT.mem": gotMem, "GOT.func": gotFunc} {
 		m, err := l.instantiateBytes(ctx, b.Encode(), glue)
@@ -143,6 +172,17 @@ func (l *Linker) Open(ctx context.Context, main api.Module, bin []byte) (int32, 
 	mod, err := l.instantiate(ctx, side.mod, glue)
 	if err != nil {
 		return 0, err
+	}
+
+	// Functions it imports from itself go through their trampolines.
+	if len(selfFuncs) > 0 {
+		slots, err := l.placeFuncs(ctx, main, mod, selfFuncs)
+		if err != nil {
+			return 0, err
+		}
+		for i, name := range selfFuncs {
+			glue["env"].ExportedGlobal(linkerSlotPrefix + name).(api.MutableGlobal).Set(uint64(slots[i]))
+		}
 	}
 
 	// Functions whose address the side module takes: main's, then its own.
@@ -199,13 +239,20 @@ func (l *Linker) Close(ctx context.Context) {
 	l.modules = nil
 }
 
-// linkEnv resolves one import from env.
-func (l *Linker) linkEnv(env *wasmbin.Builder, imp wasmbin.Import, main api.Module, memBase, tableBase uint32) error {
+// linkerSlotPrefix names the global holding a trampoline's table slot.
+const linkerSlotPrefix = "gophper.slot."
+
+// linkEnv resolves one import from env. Imports are added at once. A
+// definition is returned as def, to add after every import. self reports a
+// function that main lacks: the side module itself defines it, weakly, and
+// imports it so that another module could take its place. It goes through
+// a trampoline, set once the side module exists.
+func (l *Linker) linkEnv(env *wasmbin.Builder, imp wasmbin.Import, main api.Module, memBase, tableBase uint32) (def func(), self bool, err error) {
 	switch {
 	case imp.Name == "__memory_base":
-		env.Export(imp.Name, wasmbin.KindGlobal, env.DefineGlobal(false, memBase))
+		return func() { env.Export(imp.Name, wasmbin.KindGlobal, env.DefineGlobal(false, memBase)) }, false, nil
 	case imp.Name == "__table_base":
-		env.Export(imp.Name, wasmbin.KindGlobal, env.DefineGlobal(false, tableBase))
+		return func() { env.Export(imp.Name, wasmbin.KindGlobal, env.DefineGlobal(false, tableBase)) }, false, nil
 	case imp.Kind == wasmbin.KindMemory:
 		env.ImportMemory("main", "memory")
 		env.Export(imp.Name, wasmbin.KindMemory, 0)
@@ -215,25 +262,25 @@ func (l *Linker) linkEnv(env *wasmbin.Builder, imp wasmbin.Import, main api.Modu
 	case imp.Kind == wasmbin.KindGlobal:
 		g := main.ExportedGlobal(imp.Name)
 		if g == nil {
-			return fmt.Errorf("undefined symbol: %s", imp.Name)
+			return nil, false, fmt.Errorf("undefined symbol: %s", imp.Name)
 		}
 		_, mutable := g.(api.MutableGlobal)
 		env.Export(imp.Name, wasmbin.KindGlobal, env.ImportGlobal("main", imp.Name, g.Type(), mutable))
 	case imp.Kind == wasmbin.KindTag:
 		params, ok := l.cache.tagTypes[imp.Name]
 		if !ok {
-			return fmt.Errorf("undefined tag: %s", imp.Name)
+			return nil, false, fmt.Errorf("undefined tag: %s", imp.Name)
 		}
 		env.Export(imp.Name, wasmbin.KindTag, env.ImportTag("main", imp.Name, params))
 	case imp.Kind == wasmbin.KindFunc:
 		target := linkerTarget(main, imp.Name)
 		if target == "" {
-			return fmt.Errorf("undefined symbol: %s", imp.Name)
+			return nil, true, nil
 		}
-		def := main.ExportedFunction(target).Definition()
-		env.Export(imp.Name, wasmbin.KindFunc, env.ImportFunc("main", target, def.ParamTypes(), def.ResultTypes()))
+		fd := main.ExportedFunction(target).Definition()
+		env.Export(imp.Name, wasmbin.KindFunc, env.ImportFunc("main", target, fd.ParamTypes(), fd.ResultTypes()))
 	}
-	return nil
+	return nil, false, nil
 }
 
 // linkerTarget is main's export that name resolves to, or "". gophper-wasm

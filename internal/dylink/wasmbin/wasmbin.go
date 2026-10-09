@@ -214,6 +214,7 @@ type Builder struct {
 	types, imports, funcs, globals, exports, elems, codes [][]byte
 
 	importedFuncs, importedGlobals, importedTags uint32
+	hasTable                                     bool
 }
 
 func (b *Builder) funcType(params, results []api.ValueType) uint32 {
@@ -237,8 +238,13 @@ func (b *Builder) ImportFunc(module, name string, params, results []api.ValueTyp
 	return b.importedFuncs - 1
 }
 
-// ImportTable imports a funcref table. Minimum 0 matches any table.
+// ImportTable imports a funcref table, as table 0. Minimum 0 matches any
+// table. A second call does nothing.
 func (b *Builder) ImportTable(module, name string) {
+	if b.hasTable {
+		return
+	}
+	b.hasTable = true
 	b.imports = append(b.imports, append(importHeader(module, name, KindTable), 0x70, 0x00, 0x00))
 }
 
@@ -276,6 +282,27 @@ func (b *Builder) DefineGlobal(mutable bool, v uint32) uint32 {
 func (b *Builder) DefineGrow() uint32 {
 	b.funcs = append(b.funcs, uleb(b.funcType([]api.ValueType{api.ValueTypeI32}, []api.ValueType{api.ValueTypeI32})))
 	body := []byte{0x00, 0xd0, 0x70, 0x20, 0x00, 0xfc, 0x0f, 0x00, 0x0b}
+	b.codes = append(b.codes, append(uleb(uint32(len(body))), body...))
+	return b.importedFuncs + uint32(len(b.funcs)) - 1
+}
+
+// DefineTrampoline adds a function of the given type that calls whatever
+// table 0 holds at the index in global slot, and returns its index. The
+// slot can be filled after the module that defines the target is
+// instantiated. Table 0 must be imported.
+func (b *Builder) DefineTrampoline(params, results []api.ValueType, slot uint32) uint32 {
+	typ := b.funcType(params, results)
+	b.funcs = append(b.funcs, uleb(typ))
+	body := []byte{0x00} // no locals
+	for i := range params {
+		body = append(body, 0x20)
+		body = append(body, uleb(uint32(i))...)
+	}
+	body = append(body, 0x23)
+	body = append(body, uleb(slot)...)
+	body = append(body, 0x11)
+	body = append(body, uleb(typ)...)
+	body = append(body, 0x00, 0x0b)
 	b.codes = append(b.codes, append(uleb(uint32(len(body))), body...))
 	return b.importedFuncs + uint32(len(b.funcs)) - 1
 }

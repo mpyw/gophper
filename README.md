@@ -237,8 +237,8 @@ These come with gophper:
 
 | Extension | What it adds |
 | --- | --- |
-| `curl` | libcurl, with HTTPS through the same OpenSSL |
 | `gd` | Images, with PNG and JPEG |
+| `intl` | ICU 78. `extension install intl` also writes ICU's data, 33 MB, beside it. |
 | `sodium` | libsodium |
 | `zip` | `ZipArchive`, with AES encryption |
 | `dl_test` | php-src's extension for testing `dl()` |
@@ -323,8 +323,9 @@ Most of it is wazero validating the 16 MB binary, which it does even with the ca
 | `dns_get_record`, `checkdnsrr`, `getmxrr` | Works. The host queries the name servers in `/etc/resolv.conf`. |
 | Other built-in extensions | bcmath, calendar, ctype, exif, fileinfo, filter, iconv, mbstring, Phar, posix, session, tokenizer |
 | Loading extensions at runtime | Works. See [Extensions](#extensions). |
-| `curl`, `gd`, `sodium`, `zip` | Load at runtime. See [Extensions](#extensions). |
-| Other extensions (`intl`, `pgsql`, `redis`, ...) | Not built yet |
+| `curl` | Built in, with HTTPS through the same OpenSSL and CA bundle |
+| `gd`, `intl`, `sodium`, `zip` | Load at runtime. See [Extensions](#extensions). |
+| Other extensions (`pgsql`, `redis`, `imagick`, ...) | Not built yet |
 
 > [!NOTE]
 > A script blocked reading a socket is not stopped by `max_execution_time`.
