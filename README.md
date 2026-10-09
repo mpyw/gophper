@@ -236,7 +236,7 @@ location ~ \.php(/|$) {
 | `--temp-dir DIR` | Mounted at `/tmp` inside PHP. Default: the system's | |
 | `--no-processes` | Stops PHP from starting host programs (`proc_open`, `exec` and the rest) | `disable_functions` |
 | `--no-network` | Stops PHP from using TCP, UDP and DNS. Unix sockets inside the mounts still work. | |
-| `--memory-max SIZE` | Caps each PHP instance's memory, such as `512M`. `memory_limit` cannot lift it. A worker's opcache takes 64 MB of it. serve and fcgi refuse a cap PHP cannot start under. Default: none | |
+| `--memory-max SIZE` | Caps each PHP instance's memory, such as `512M`. `memory_limit` cannot lift it. A worker's opcache takes 64 MB of it, so a worker needs about 96M. serve and fcgi refuse a cap PHP cannot start under. Default: none | |
 | `--no-workers` | Starts a fresh PHP instance for each request | |
 | `--max-requests N` | Requests a worker serves before it is replaced. Default: 500 | `pm.max_requests` |
 | `--opcache-dir DIR` | Where opcache keeps compiled scripts between requests. Default: the user cache directory | |

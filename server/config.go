@@ -53,7 +53,8 @@ type PHPConfig struct {
 	NoNetwork bool
 	// MemoryLimit caps each PHP instance's linear memory, in bytes, which
 	// memory_limit in php.ini cannot lift. A worker's opcache takes 64 MB
-	// of it. A cap PHP cannot start under is refused at once. Zero means
+	// of it, so a worker needs about 96 MB. A cap PHP cannot start under is
+	// refused at once. Zero means
 	// none below WebAssembly's own 4 GiB.
 	MemoryLimit int64
 }
