@@ -22,7 +22,7 @@ import (
 )
 
 // engineABIVersion is the phpwasm.ABIVersion this host implements.
-const engineABIVersion = 2
+const engineABIVersion = 3
 
 // Engine compiles the PHP binaries once and runs them many times.
 // It is safe for concurrent use. Each run gets a fresh PHP instance.
@@ -145,7 +145,9 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 	if fs == nil {
 		fs = wazero.NewFSConfig()
 	}
-	fs = fs.WithFSMount(hostnet.SocketPlaceholderFS, hostnet.SocketPlaceholderDir)
+	fs = fs.WithFSMount(hostnet.SocketPlaceholderFS, hostnet.SocketPlaceholderDir).
+		// OPENSSLDIR: openssl.cnf and the CA bundle.
+		WithFSMount(phpwasm.SSL, "/etc/gophper/ssl")
 	if e.extensionDir != "" {
 		fs = fs.WithReadOnlyDirMount(e.extensionDir, engineExtensionDir)
 	}

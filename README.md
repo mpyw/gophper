@@ -98,7 +98,7 @@ gophper serve --root public
 `--mount` defaults to the current directory, so PHP reaches `vendor/` and `storage/` outside `public/`.
 
 > [!WARNING]
-> Laravel itself does not boot yet. It needs `openssl`, `dom` and other extensions that are not built.
+> Laravel itself is not verified to boot yet.
 
 ### FastCGI
 
@@ -244,11 +244,14 @@ With the cache, `gophper php -r 'echo 1;'` takes about 0.07 seconds.
 | Sockets | Tested: TCP clients and servers, UDP and Unix clients, `stream_select`, and the `http://` wrapper |
 | DNS | Works, through Go's resolver |
 | `date`, `pcre`, `hash`, `json`, `random`, `spl`, `uri`, `lexbor` | Works |
+| `openssl`, including HTTPS with certificate checks | Works. The CA bundle is Mozilla's, from gophper-wasm. |
+| `dom`, `xml`, `simplexml`, `xmlreader`, `xmlwriter` | Works |
+| `pdo_sqlite`, `sqlite3`, `zlib` | Works |
 | Fibers | Throws `Fibers are not supported on this platform`. |
 | `proc_open`, `exec`, `posix_*` | Not yet |
-| Built-in extensions | bcmath, calendar, ctype, exif, fileinfo, filter, iconv, mbstring, mysqli, PDO, pdo_mysql, Phar, posix, session, tokenizer, and the core ones |
+| Other built-in extensions | bcmath, calendar, ctype, exif, fileinfo, filter, iconv, mbstring, mysqli, PDO, pdo_mysql, Phar, posix, session, tokenizer |
 | Loading extensions at runtime | Works. See [Extensions](#extensions). |
-| Other extensions (`openssl`, `curl`, `intl`, `gd`, `pdo_sqlite`, ...) | Not built yet |
+| Other extensions (`curl`, `intl`, `gd`, `zip`, `pgsql`, ...) | Not built yet |
 
 > [!NOTE]
 > A script blocked reading a socket is not stopped by `max_execution_time`.
