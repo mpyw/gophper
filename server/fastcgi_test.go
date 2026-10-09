@@ -480,8 +480,12 @@ func TestFastCGIPingStatusAndAccessLog(t *testing.T) {
 	for path, want := range map[string]string{"/ping": "pong\n", "/status": "accepted requests: 1\n"} {
 		if path == "/status" {
 			// One PHP request first, so the counter moves.
-			if _, err := dialFCGI(t, addr).do(1, false, params(root, "GET", "/index.php", nil), nil); err != nil {
+			res, err := dialFCGI(t, addr).do(1, false, params(root, "GET", "/index.php", nil), nil)
+			if err != nil {
 				t.Fatal(err)
+			}
+			if res.Status != 201 {
+				t.Fatalf("index.php: %d %q\n%s", res.Status, res.Body, res.Stderr)
 			}
 		}
 		res, err := dialFCGI(t, addr).do(1, false, params(root, "GET", path, nil), nil)

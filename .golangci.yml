@@ -143,6 +143,7 @@ linters:
             - $gostd
             - github.com/tetratelabs/wazero
             - github.com/mpyw/gophper/internal/wasi$
+            - github.com/mpyw/gophper/internal/hostpath$
             - golang.org/x/sys/windows$
 
         # Child processes for the guest. Pipes and sockets come from hostnet.

@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mpyw/gophper/internal/hostpath"
 	"github.com/mpyw/gophper/internal/wasi"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
@@ -100,16 +101,41 @@ func (socketPlaceholderFS) Open(name string) (fs.File, error) {
 
 // Sockets holds the sockets of one PHP instance, keyed by guest fd.
 type Sockets struct {
-	run     wasi.Run
-	mu      sync.Mutex
-	entries map[int32]*socketEntry
+	run wasi.Run
+	// hostPath maps the path of a Unix socket to the host, as Options.HostPath
+	// does for files. Nil maps none.
+	hostPath SocketsHostPath
+	mu       sync.Mutex
+	entries  map[int32]*socketEntry
 	// changed is closed on any change to any socket, then replaced.
 	changed chan struct{}
 }
 
-// NewSockets returns an empty table for one PHP instance.
-func NewSockets(run wasi.Run) *Sockets {
-	return &Sockets{run: run, entries: map[int32]*socketEntry{}, changed: make(chan struct{})}
+// SocketsHostPath maps a path inside PHP to its host path, whether PHP may
+// write there, and whether it maps at all.
+type SocketsHostPath func(path string) (host string, writable, ok bool)
+
+// NewSockets returns an empty table for one PHP instance. A Unix socket's
+// path goes through hostPath, as a file's does: a sandbox reaches no host
+// socket, such as Docker's.
+func NewSockets(run wasi.Run, hostPath SocketsHostPath) *Sockets {
+	return &Sockets{run: run, hostPath: hostPath, entries: map[int32]*socketEntry{}, changed: make(chan struct{})}
+}
+
+// unixHost maps the path of a Unix socket. bind creates the file, so it
+// needs a writable path.
+func (t *Sockets) unixHost(path string, create bool) (string, int32) {
+	if t.hostPath == nil {
+		return "", wasi.ENOENT
+	}
+	host, writable, ok := t.hostPath(path)
+	switch {
+	case !ok:
+		return "", wasi.ENOENT
+	case create && !writable:
+		return "", wasi.EROFS
+	}
+	return host, 0
 }
 
 // Close closes every socket the script left open.
@@ -385,6 +411,10 @@ func socketAddrText(a net.Addr) string {
 	if a == nil {
 		return ""
 	}
+	if ua, ok := a.(*net.UnixAddr); ok && ua.Name != "" {
+		// The guest's path, as the mounts map it.
+		return hostpath.Guest(ua.Name)
+	}
 	return a.String()
 }
 
@@ -437,6 +467,13 @@ func (x socketExports) connect(ctx context.Context, m api.Module, fd int32, addr
 		return wasi.EALREADY
 	case e.listener != nil:
 		return wasi.EINVAL
+	}
+	if e.kind == socketUnix || e.kind == socketUnixgram {
+		host, errno := t.unixHost(addr, false)
+		if errno != 0 {
+			return errno
+		}
+		addr = host
 	}
 
 	if e.datagram() {
@@ -504,6 +541,13 @@ func (x socketExports) bind(ctx context.Context, m api.Module, fd int32, addrPtr
 	}
 	if e.bound != "" || e.conn != nil {
 		return wasi.EINVAL
+	}
+	if e.kind == socketUnix || e.kind == socketUnixgram {
+		host, errno := t.unixHost(addr, true)
+		if errno != 0 {
+			return errno
+		}
+		addr = host
 	}
 	if e.datagram() {
 		pc, err := net.ListenPacket(e.network(), addr)
@@ -721,7 +765,11 @@ func (x socketExports) send(ctx context.Context, m api.Module, fd int32, bufPtr 
 			}
 			raddr = ua
 		} else {
-			raddr = &net.UnixAddr{Name: to, Net: "unixgram"}
+			host, errno := t.unixHost(to, false)
+			if errno != 0 {
+				return -errno
+			}
+			raddr = &net.UnixAddr{Name: host, Net: "unixgram"}
 		}
 		written, err := pc.WriteTo(data, raddr)
 		if err != nil {

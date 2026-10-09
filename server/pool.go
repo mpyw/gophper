@@ -307,6 +307,10 @@ func (p *pool) hostPath(path string) (string, bool, bool) {
 			return host, !m.ReadOnly, true
 		}
 	}
+	// A worker binds its FastCGI socket here, outside every mount.
+	if p.workers != nil && (Mount{Dir: p.workers.dir}).contains(host) {
+		return host, true, true
+	}
 	return "", false, false
 }
 

@@ -195,6 +195,32 @@ func TestSocketUnix(t *testing.T) {
 	}
 }
 
+// TestSocketUnixSandbox connects to a host Unix socket with no HostPath.
+// The socket's path maps to no host file, so a sandbox cannot reach it, as
+// it cannot reach Docker's.
+func TestSocketUnixSandbox(t *testing.T) {
+	dir, err := os.MkdirTemp(netShortTempBase(), "gophper")
+	if err != nil {
+		t.Skip(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	path := filepath.Join(dir, "echo.sock")
+	echoServer(t, "unix", path)
+	var out bytes.Buffer
+	_, err = newTestEngine(t).RunCLI(context.Background(), gophper.Options{
+		Args: []string{"-r", fmt.Sprintf(`var_dump(@stream_socket_client("unix://%s", $errno, $errstr, 5), $errno);`,
+			gophper.HostToGuest(path))},
+		Stdout: &out,
+		Stderr: &out,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "bool(false)\nint(44)\n"; out.String() != want {
+		t.Errorf("got %q, want %q (ENOENT)", out.String(), want)
+	}
+}
+
 func TestSocketUDP(t *testing.T) {
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {
