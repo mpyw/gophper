@@ -4,9 +4,7 @@ package gophper
 
 import (
 	"context"
-	"io"
 	"os"
-	"sync"
 
 	"github.com/mpyw/gophper/internal/dylink"
 	"github.com/mpyw/gophper/internal/hostfn"
@@ -81,26 +79,4 @@ func (i *engineInstance) forwardSignals(ch <-chan os.Signal, done <-chan struct{
 			return
 		}
 	}
-}
-
-// engineSharedStdin returns stdin as PHP and its children read it at the
-// same time: PHP from the guest's goroutine, a child's pipe from another.
-// A file has its own locking. Any other reader gets one, as a
-// strings.Reader would lose its place.
-func engineSharedStdin(stdin io.Reader) io.Reader {
-	if _, ok := stdin.(*os.File); ok || stdin == nil {
-		return stdin
-	}
-	return &engineLockedReader{r: stdin}
-}
-
-type engineLockedReader struct {
-	mu sync.Mutex
-	r  io.Reader
-}
-
-func (l *engineLockedReader) Read(p []byte) (int, error) {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.r.Read(p)
 }

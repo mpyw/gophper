@@ -65,9 +65,11 @@ type Processes struct {
 	allowed  bool
 	hostPath ProcessesHostPath
 	binDir   string
-	stdin    *processGuardedReader
-	stdout   *processGuardedWriter
-	stderr   *processGuardedWriter
+	// stdin is the instance's own, which a child shares only if it is a
+	// file. Any other it could not give back what it did not read.
+	stdin  io.Reader
+	stdout *processGuardedWriter
+	stderr *processGuardedWriter
 
 	mu       sync.Mutex
 	children map[int32]*processChild
@@ -77,8 +79,10 @@ type Processes struct {
 
 // NewProcesses returns an empty table for one PHP instance. Unless allowed,
 // every spawn fails with EPERM. stdin, stdout and stderr are the instance's
-// own. A child given one that is a file shares it, as a real fd. Any other
-// it gets until Close, even when it outlives the instance.
+// own. A child given one that is a file shares it, as a real fd. A stdin
+// that is no file it does not get: it reads the null device, as a php-fpm
+// child does. A stdout or stderr that is no file it writes to until Close,
+// even when it outlives the instance.
 //
 // binDir, if not empty, goes first in a child's PATH. It holds the
 // command "php", so that a script started with "#!/usr/bin/env php" runs on
@@ -90,7 +94,7 @@ func NewProcesses(run wasi.Run, sockets *hostnet.Sockets, allowed bool, hostPath
 		sockets:  sockets,
 		allowed:  allowed,
 		hostPath: hostPath,
-		stdin:    &processGuardedReader{r: stdin},
+		stdin:    stdin,
 		stdout:   &processGuardedWriter{w: stdout},
 		stderr:   &processGuardedWriter{w: stderr},
 		children: map[int32]*processChild{},
@@ -99,11 +103,10 @@ func NewProcesses(run wasi.Run, sockets *hostnet.Sockets, allowed bool, hostPath
 }
 
 // Close detaches the children from the instance. They keep running, as
-// children of an exited PHP would, and are reaped when they exit. A stdio
-// stream that is a file stays theirs, as a real fd would. From any other,
-// they now read EOF, and their writes are dropped.
+// children of an exited PHP would, and are reaped when they exit. A stdout
+// or stderr that is a file stays theirs, as a real fd would. To any other,
+// their writes are now dropped.
 func (p *Processes) Close() {
-	p.stdin.close()
 	p.stdout.close()
 	p.stderr.close()
 }
@@ -185,16 +188,7 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 	cmd.Env, cmd.Dir = env, cwd
 
 	var release []func()
-	// feeds are the pipes a child reads. Their write ends close once it
-	// exits, or here if it never started.
-	var feeds []processFeed
-	started := false
 	defer func() {
-		if !started {
-			for _, f := range feeds {
-				_ = f.w.Close() // no child to feed
-			}
-		}
 		for _, r := range release {
 			r()
 		}
@@ -218,7 +212,11 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 		case processChildStdio:
 			switch value {
 			case 0:
-				r = p.stdin.reader()
+				if f, ok := p.stdin.(*os.File); ok {
+					r = f
+				} else if p.stdin != nil {
+					r = processNoStdin{}
+				}
 			case 1:
 				w = p.stdout.writer()
 			case 2:
@@ -247,17 +245,16 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 			r, w = f, f
 		}
 		if _, isFile := r.(*os.File); r != nil && !isFile {
-			// Not a file: os/exec would copy it in a goroutine that Wait
-			// waits for, so exec() would return only at the next input.
-			// The child gets a pipe instead, fed once it has started. A
-			// file, such as the CLI's terminal, goes to the child as it is.
-			pr, pw, err := os.Pipe()
+			// A stdin that is no file cannot be shared, as a real fd would
+			// be. Feeding a pipe from it would take what the child never
+			// reads, and PHP would lose it. The child reads nothing, as a
+			// php-fpm child does.
+			null, err := os.Open(os.DevNull)
 			if err != nil {
 				return errnoFrom(err)
 			}
-			release = append(release, func() { _ = pr.Close() }) // the child has its own copy
-			feeds = append(feeds, processFeed{r: r, w: pw})
-			r = pr
+			release = append(release, func() { _ = null.Close() }) // the child has its own copy
+			r = null
 		}
 
 		switch fd {
@@ -282,16 +279,6 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 	if err := cmd.Start(); err != nil {
 		return errnoFrom(err)
 	}
-	started = true
-	for _, f := range feeds {
-		go func() {
-			// Fails once the child is gone and the pipe is closed. A read
-			// already waiting for input then takes it, as the child would
-			// have.
-			_, _ = io.Copy(f.w, f.r)
-			_ = f.w.Close() // EOF for the child; a second close changes nothing
-		}()
-	}
 	pid := int32(cmd.Process.Pid)
 	c := &processChild{cmd: cmd}
 	p.mu.Lock()
@@ -301,9 +288,6 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 		// The exit status is read from cmd.ProcessState below; the error
 		// adds nothing the guest can see.
 		_ = cmd.Wait()
-		for _, f := range feeds {
-			_ = f.w.Close() // the child is gone; a feeder still writing stops
-		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		c.done = true
@@ -480,46 +464,11 @@ func processWaitStatus(ps *os.ProcessState) int32 {
 	return int32(ps.ExitCode()&0xff) << 8
 }
 
-// processFeed copies what a child reads to the pipe it reads from.
-type processFeed struct {
-	r io.Reader
-	w *os.File
-}
+// processNoStdin stands for a stdin that is no file: spawn gives the child
+// the null device for it.
+type processNoStdin struct{}
 
-// processGuardedReader is the instance's stdin as children see it.
-type processGuardedReader struct {
-	mu     sync.Mutex
-	r      io.Reader
-	closed bool
-}
-
-// reader returns what a child reads: the stdin itself if it is a file, so
-// that the child shares it as with a real fd.
-func (g *processGuardedReader) reader() io.Reader {
-	if f, ok := g.r.(*os.File); ok {
-		return f
-	}
-	if g.r == nil {
-		return nil
-	}
-	return g
-}
-
-func (g *processGuardedReader) Read(p []byte) (int, error) {
-	g.mu.Lock()
-	closed := g.closed
-	g.mu.Unlock()
-	if closed {
-		return 0, io.EOF
-	}
-	return g.r.Read(p)
-}
-
-func (g *processGuardedReader) close() {
-	g.mu.Lock()
-	g.closed = true
-	g.mu.Unlock()
-}
+func (processNoStdin) Read([]byte) (int, error) { return 0, io.EOF }
 
 // processGuardedWriter is the instance's stdout or stderr as children see it. A
 // child that outlives the instance must not write to, say, an HTTP

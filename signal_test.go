@@ -169,3 +169,26 @@ func (b *signalBuffer) Write(p []byte) (int, error) {
 	}
 	return n, err
 }
+
+// TestSignalSleepInHandler sleeps in a handler while the next signal is
+// pending. Each sleep sleeps, as native PHP blocks signals in a handler:
+// returning at once for the pending signal spun the loop millions of times.
+func TestSignalSleepInHandler(t *testing.T) {
+	out, code := runPHP(t, `
+		pcntl_async_signals(true);
+		pcntl_signal(SIGALRM, function () {
+			pcntl_alarm(1);
+			$n = 0;
+			for ($end = microtime(true) + 2; microtime(true) < $end; $n++) {
+				usleep(100000);
+			}
+			echo $n < 100 ? "slept\n" : "spun $n times\n";
+			exit(0);
+		});
+		pcntl_alarm(1);
+		sleep(10);
+		echo "not interrupted\n";`)
+	if code != 0 || out != "slept\n" {
+		t.Errorf("exit %d: %q", code, out)
+	}
+}

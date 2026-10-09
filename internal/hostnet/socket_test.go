@@ -627,9 +627,10 @@ func TestSocketUDP(t *testing.T) {
 	go func() {
 		time.Sleep(20 * time.Millisecond)
 		h.tab.mu.Lock()
-		h.tab.entries[2].close()
+		release := h.tab.entries[2].close()
 		h.tab.notify()
 		h.tab.mu.Unlock()
+		release()
 	}()
 	if _, _, r := h.recv(2, 100, 0); r != -wasi.EBADF {
 		t.Errorf("recv on a closed socket = %d", r)

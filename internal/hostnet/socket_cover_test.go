@@ -270,8 +270,9 @@ func TestSocketAcceptOnClosedSocket(t *testing.T) {
 	}
 	// Closed but still in the table, as a waiting accept sees it.
 	h.tab.mu.Lock()
-	h.tab.entries[1].close()
+	release := h.tab.entries[1].close()
 	h.tab.mu.Unlock()
+	release()
 	if errno := h.x.accept(h.ctx, 1, 2, 1); errno != wasi.EBADF {
 		t.Errorf("accept = %d, want EBADF", errno)
 	}
@@ -286,8 +287,9 @@ func TestSocketRecvOnClosedStream(t *testing.T) {
 		t.Fatalf("connect = %d", errno)
 	}
 	h.tab.mu.Lock()
-	h.tab.entries[1].close()
+	release := h.tab.entries[1].close()
 	h.tab.mu.Unlock()
+	release()
 	if _, _, r := h.recv(1, 10, 0); r != -wasi.ENOTCONN {
 		t.Errorf("recv = %d, want -ENOTCONN", r)
 	}

@@ -346,25 +346,6 @@ func TestProcessWaitStatus(t *testing.T) {
 	}
 }
 
-func TestProcessGuardedReader(t *testing.T) {
-	if (&processGuardedReader{}).reader() != nil {
-		t.Error("no stdin: a child got a reader")
-	}
-	if f := os.Stdin; (&processGuardedReader{r: f}).reader() != io.Reader(f) {
-		t.Error("a file stdin is not given as is")
-	}
-	g := &processGuardedReader{r: strings.NewReader("abc")}
-	r := g.reader()
-	buf := make([]byte, 2)
-	if n, err := r.Read(buf); err != nil || string(buf[:n]) != "ab" {
-		t.Errorf("read %q, %v", buf[:n], err)
-	}
-	g.close()
-	if n, err := r.Read(buf); n != 0 || err != io.EOF {
-		t.Errorf("after close: %d, %v, want EOF", n, err)
-	}
-}
-
 func TestProcessGuardedWriter(t *testing.T) {
 	if (&processGuardedWriter{}).writer() != nil {
 		t.Error("no stdout: a child got a writer")

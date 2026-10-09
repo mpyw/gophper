@@ -166,9 +166,16 @@ func TestProcessFiles(t *testing.T) {
 		{"a read-only file to read", fmt.Sprintf(`
 			$p = proc_open(['cat'], [['file', %s, 'r'], ['pipe', 'w']], $pipes);
 			echo trim(stream_get_contents($pipes[1])), ' ', proc_close($p);`, php(filepath.Join(ro, "kept"))), nil, "read-only 0"},
-		{"the instance's stdin", `
+		// A stdin that is no file reaches no child, even passed by name: the
+		// null device instead, so that PHP keeps what the child would not
+		// read. A pipe gives a child data. TestProcessFileStdin shares a file.
+		{"the instance's stdin, which is no file", `
 			$p = proc_open(['cat'], [STDIN, ['pipe', 'w']], $pipes);
-			echo trim(stream_get_contents($pipes[1])), ' ', proc_close($p);`, strings.NewReader("typed in\n"), "typed in 0"},
+			echo trim(stream_get_contents($pipes[1])), '|', proc_close($p), '|', trim(stream_get_contents(STDIN));`, strings.NewReader("typed in\n"), "|0|typed in"},
+		{"a pipe for the child's stdin", `
+			$p = proc_open(['cat'], [['pipe', 'r'], ['pipe', 'w']], $pipes);
+			fwrite($pipes[0], "piped in\n"); fclose($pipes[0]);
+			echo trim(stream_get_contents($pipes[1])), ' ', proc_close($p);`, nil, "piped in 0"},
 		{"a relative PATH", fmt.Sprintf(`
 			$p = proc_open(['greet', 'you'], [1 => ['pipe', 'w']], $pipes, %s, ['PATH' => 'bin']);
 			echo trim(stream_get_contents($pipes[1])); proc_close($p);`, php(dir)), nil, "greet you"},
@@ -350,9 +357,11 @@ func TestProcessFileStdin(t *testing.T) {
 	}
 }
 
-// TestProcessSharedStdin reads a stdin that is no file from PHP while a
-// child's pipe is fed from it too. Run with -race: both read the reader.
-func TestProcessSharedStdin(t *testing.T) {
+// TestProcessStdinStaysWithPHP starts a child while the instance's stdin
+// is no file. The child reads the null device, so what PHP reads after it
+// is all there: from a reader at hand, and from a stream that is written
+// later.
+func TestProcessStdinStaysWithPHP(t *testing.T) {
 	exe, err := os.Executable()
 	if err != nil {
 		t.Fatal(err)
@@ -361,24 +370,42 @@ func TestProcessSharedStdin(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var out bytes.Buffer
-	_, err = newTestEngine(t).RunCLI(context.Background(), gophper.Options{
-		Args: []string{"-r", fmt.Sprintf(`
-			$p = proc_open([%q, "-test.run=^$"], [1 => ["pipe", "w"], 2 => ["pipe", "w"]], $pipes);
-			$n = strlen(stream_get_contents(STDIN));
-			stream_get_contents($pipes[1]);
-			proc_close($p);
-			echo $n > 0 ? "read" : "nothing";`, gophper.HostToGuest(exe))},
-		Stdin:     strings.NewReader(strings.Repeat("x", 1<<20)),
-		Stdout:    &out,
-		Stderr:    &out,
-		Dir:       gophper.HostToGuest(wd),
-		FS:        gophper.HostFS(),
-		HostPath:  gophper.HostPaths,
-		Processes: true,
-	})
-	if err != nil || out.String() != "read" {
-		t.Errorf("%q, %v", out.String(), err)
+	child := fmt.Sprintf(`$p = proc_open([%q, "-test.run=^$"], [1 => ["pipe", "w"], 2 => ["pipe", "w"]], $pipes);
+		stream_get_contents($pipes[1]);
+		proc_close($p);`, gophper.HostToGuest(exe))
+	run := func(stdin io.Reader, code string) string {
+		t.Helper()
+		var out bytes.Buffer
+		_, err := newTestEngine(t).RunCLI(context.Background(), gophper.Options{
+			Args:      []string{"-r", child + code},
+			Stdin:     stdin,
+			Stdout:    &out,
+			Stderr:    &out,
+			Dir:       gophper.HostToGuest(wd),
+			FS:        gophper.HostFS(),
+			HostPath:  gophper.HostPaths,
+			Processes: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+	if got := run(strings.NewReader("hello body\n"), `var_dump(stream_get_contents(STDIN));`); got != "string(11) \"hello body\n\"\n" {
+		t.Errorf("a reader: %q", got)
+	}
+	pr, pw := io.Pipe()
+	go func() {
+		time.Sleep(200 * time.Millisecond) // the child has come and gone
+		for _, line := range []string{"line1\n", "line2\n"} {
+			if _, err := io.WriteString(pw, line); err != nil {
+				return
+			}
+		}
+		_ = pw.Close() // EOF for PHP
+	}()
+	if got := run(pr, `var_dump(fgets(STDIN), fgets(STDIN));`); got != "string(6) \"line1\n\"\nstring(6) \"line2\n\"\n" {
+		t.Errorf("a stream: %q", got)
 	}
 }
 

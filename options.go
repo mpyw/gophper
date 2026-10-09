@@ -28,7 +28,8 @@ type Options struct {
 	// with no host file behind it. Nil means no path has one.
 	HostPath func(path string) (host string, writable, ok bool)
 	// Processes lets PHP start host programs: proc_open, exec and the rest.
-	// A child runs outside FS, with the rights of the Go process.
+	// A child runs outside FS, with the rights of the Go process. It shares
+	// a Stdin that is an *os.File, and reads the null device for any other.
 	Processes bool
 	// Network lets PHP use TCP, UDP and DNS, with the network of the Go
 	// process. Without it, they fail with EACCES, and a name with no

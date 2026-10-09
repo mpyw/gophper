@@ -32,6 +32,10 @@ type Signals struct {
 	// is signal n.
 	handled, ignored uint64
 	pending          uint64
+	// fresh is set by Deliver, and cleared once a sleep returned for it or
+	// the guest took the signals. A handler runs with the next signal still
+	// pending in the host, and each of its sleeps would return at once.
+	fresh bool
 	// changed is closed when a signal becomes pending, then replaced.
 	changed chan struct{}
 	alarm   *time.Timer
@@ -77,6 +81,7 @@ func ExportSignals(b wazero.HostModuleBuilder, from func(context.Context) *Signa
 		defer s.mu.Unlock()
 		p := s.pending
 		s.pending = 0
+		s.fresh = false
 		return int64(p)
 	}).Export("sig_take")
 	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mask int64, timeoutMs int32) int32 {
@@ -107,6 +112,7 @@ func (s *Signals) Deliver(sig int32) {
 		return
 	}
 	s.pending |= bit
+	s.fresh = true
 	close(s.changed)
 	s.changed = make(chan struct{})
 	fatal := s.handled&bit == 0
@@ -147,11 +153,15 @@ func (s *Signals) Stop() {
 	s.grace = nil
 }
 
-// Pending reports whether a signal waits for the guest.
+// Pending reports, once for each delivery, whether a signal waits for the
+// guest. A sleep returns early for it once. Native PHP blocks signals while
+// a handler runs, so a handler's sleeps sleep in full, as here.
 func (s *Signals) Pending() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	return s.pending != 0
+	fresh := s.fresh && s.pending != 0
+	s.fresh = false
+	return fresh
 }
 
 // Terminated is the fatal signal that ended the run from the host, or 0.

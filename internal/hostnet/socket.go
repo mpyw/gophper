@@ -175,12 +175,16 @@ func (t *Sockets) addrText(a net.Addr) string {
 // Close closes every socket the script left open.
 func (t *Sockets) Close() {
 	t.mu.Lock()
-	defer t.mu.Unlock()
+	var release []func()
 	for fd, e := range t.entries {
-		e.close()
+		release = append(release, e.close())
 		delete(t.entries, fd)
 	}
 	t.notify()
+	t.mu.Unlock()
+	for _, r := range release {
+		r()
+	}
 }
 
 // notify wakes everything waiting on t.changed. t.mu must be held.
@@ -383,24 +387,33 @@ func (e *socketEntry) network() string {
 	return "unixgram"
 }
 
-// close releases the host resources. Their Close errors are ignored: like
-// close(2) on a socket, they report nothing the guest can act on, and the fd
-// is gone either way.
-func (e *socketEntry) close() {
+// close marks the entry closed, and returns what releases its host
+// resources. t.mu must be held, and the release runs after it is let go:
+// on Windows, closing a pipe waits for a read in progress, whose goroutine
+// waits for t.mu to store what it read. The release's Close errors are
+// ignored: like close(2) on a socket, they report nothing the guest can
+// act on, and the fd is gone either way.
+func (e *socketEntry) close() func() {
 	e.closed = true
+	var closers []io.Closer
 	if e.conn != nil {
-		_ = e.conn.Close()
+		closers = append(closers, e.conn)
 	}
 	if e.listener != nil {
-		_ = e.listener.Close()
+		closers = append(closers, e.listener)
 	}
 	if e.packet != nil {
-		_ = e.packet.Close()
+		closers = append(closers, e.packet)
 	}
 	for _, c := range e.pending {
-		_ = c.Close()
+		closers = append(closers, c)
 	}
 	e.pending = nil
+	return func() {
+		for _, c := range closers {
+			_ = c.Close()
+		}
+	}
 }
 
 // events reports which of the poll bits in want are ready.
@@ -477,12 +490,16 @@ func (x socketExports) open(ctx context.Context, fd, kind int32) int32 {
 func (x socketExports) close(ctx context.Context, fd int32) int32 {
 	t := x.from(ctx)
 	t.mu.Lock()
-	defer t.mu.Unlock()
-	if e, ok := t.entries[fd]; ok {
-		e.close()
-		delete(t.entries, fd)
-		t.notify()
+	e, ok := t.entries[fd]
+	if !ok {
+		t.mu.Unlock()
+		return 0
 	}
+	release := e.close()
+	delete(t.entries, fd)
+	t.notify()
+	t.mu.Unlock()
+	release()
 	return 0
 }
 
