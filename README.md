@@ -2,7 +2,7 @@
 
 # gophper
 
-Run PHP 8.6 from Go with no cgo.
+Run PHP from Go with no cgo.
 
 gophper runs php-src, compiled to WebAssembly, on [wazero](https://github.com/tetratelabs/wazero).
 It is the real Zend Engine, so the language behaves exactly like PHP.
