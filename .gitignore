@@ -4,3 +4,8 @@
 
 # IDE
 /.idea/
+
+# Coverage profiles, written by coverage.sh
+/coverage.txt
+/coverage-bin.txt
+/coverage-merged.txt

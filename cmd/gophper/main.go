@@ -618,7 +618,7 @@ func fcgiAction(ctx context.Context, cmd *cli.Command) error {
 			return err
 		}
 	}
-	fmt.Fprintf(os.Stderr, "gophper: FastCGI on %s\n", listen)
+	fmt.Fprintf(os.Stderr, "gophper: FastCGI on %s\n", l.Addr())
 	return srv.Serve(ctx, l)
 }
 

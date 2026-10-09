@@ -131,7 +131,8 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 	}
 
 	var opcacheDir string
-	var opcacheINI []string
+	// php-cgi enables opcache by default, so NoOpcache must say so.
+	opcacheINI := []string{"opcache.enable=0"}
 	if !cfg.NoOpcache {
 		opcacheDir = cfg.OpcacheDir
 		if opcacheDir == "" {

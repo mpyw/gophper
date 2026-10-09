@@ -114,3 +114,23 @@ func TestHTTPSlowBody(t *testing.T) {
 		t.Errorf("the slow request: %d %q", res.StatusCode, b)
 	}
 }
+
+// TestHTTPNoOpcache checks that NoOpcache turns opcache off, in workers and
+// in fresh instances. php-cgi turns it on by default.
+func TestHTTPNoOpcache(t *testing.T) {
+	for _, noWorkers := range []bool{false, true} {
+		root := t.TempDir()
+		if err := os.WriteFile(filepath.Join(root, "index.php"), []byte(`<?php var_export(opcache_get_status(false));`), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		srv := startHTTPWith(t, func(c *server.HTTPConfig) {
+			c.Root = root
+			c.Mounts = []server.Mount{{Dir: root}}
+			c.NoWorkers = noWorkers
+			c.NoOpcache = true
+		})
+		if _, body := get(t, srv.URL+"/"); body != "false" {
+			t.Errorf("no workers %v: opcache_get_status() = %s", noWorkers, body)
+		}
+	}
+}
