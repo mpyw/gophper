@@ -25,7 +25,7 @@ import (
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/experimental"
 
-	"github.com/mpyw/gophper/internal/wasmbin"
+	"github.com/mpyw/gophper/internal/dylink/wasmbin"
 )
 
 // Cache compiles side modules and glue modules once for every instance.
