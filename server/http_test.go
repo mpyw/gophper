@@ -310,6 +310,11 @@ func TestHTTPRouter(t *testing.T) {
 	if res.StatusCode != 200 || body != want {
 		t.Errorf("%d %q", res.StatusCode, body)
 	}
+	// Named, it has no path info either.
+	res, body = get(t, srv.URL+"/index.php")
+	if want := "router: /index.php script /index.php path info - cwd public\nrouter env leaked: false\n"; res.StatusCode != 200 || body != want {
+		t.Errorf("/index.php: %d %q", res.StatusCode, body)
+	}
 	// The root is the front controller, with no path info.
 	res, body = get(t, srv.URL+"/")
 	if want := "router: / script /index.php path info - cwd public\nrouter env leaked: false\n"; res.StatusCode != 200 || body != want {

@@ -172,7 +172,15 @@ func cliStart(t *testing.T, dir string, args ...string) *cliServer {
 // stop sends SIGTERM and returns the exit code. It is safe to call twice.
 func (s *cliServer) stop(t *testing.T) int {
 	t.Helper()
-	if s.cmd.ProcessState == nil {
+	// Taken back at once: Wait still writes ProcessState until done holds.
+	var exited bool
+	select {
+	case err := <-s.done:
+		s.done <- err
+		exited = true
+	default:
+	}
+	if !exited {
 		if runtime.GOOS == "windows" {
 			_ = s.cmd.Process.Kill()
 		} else {
@@ -435,16 +443,16 @@ func TestCLINoCache(t *testing.T) {
 	}
 }
 
-// TestCLIServeDefaultListen starts where no --listen says: 127.0.0.1:8080,
-// or :443 and :80 with --domain. Those may be taken, or need privileges, so
-// either outcome passes. What is checked is that it tried there.
+// TestCLIServeDefaultListen starts where no --listen says: 127.0.0.1:8080.
+// It may be taken, so either outcome passes. What is checked is that it
+// tried there. --domain is left out: it would listen on :80 and :443 of
+// every interface.
 func TestCLIServeDefaultListen(t *testing.T) {
 	for _, tt := range []struct {
 		args []string
 		want string
 	}{
 		{nil, "8080"},
-		{[]string{"--domain", "gophper.invalid"}, ":80"},
 	} {
 		cmd := cliCommand(t, t.TempDir(), append([]string{"serve"}, tt.args...)...)
 		var errOut bytes.Buffer

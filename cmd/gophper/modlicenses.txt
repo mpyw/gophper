@@ -53,7 +53,7 @@ infringement, or inducement of patent infringement, then any patent
 rights granted to you under this License for this implementation of Go
 shall terminate as of the date such litigation is filed.
 
----- github.com/mpyw/gophper-wasm v0.2.1: LICENSE ----
+---- github.com/mpyw/gophper-wasm v0.2.2: LICENSE ----
 
 MIT License
 

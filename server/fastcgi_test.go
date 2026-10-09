@@ -392,6 +392,11 @@ func TestFastCGIEnvironment(t *testing.T) {
 
 func TestFastCGITimeout(t *testing.T) {
 	addr, root := startFCGI(t, "max_execution_time=1", "display_errors=0", "log_errors=1")
+	// A worker starts first, which a slow runner can take seconds for. Only
+	// the timeout is timed below.
+	if _, err := dialFCGI(t, addr).do(1, false, params(root, "GET", "/index.php", nil), nil); err != nil {
+		t.Fatal(err)
+	}
 
 	for _, tc := range []struct{ name, uri string }{
 		{"sleeping", "/index.php?mode=sleep&ms=5000&shutdown=1"},

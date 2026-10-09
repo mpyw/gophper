@@ -34,7 +34,9 @@ func Do(ctx context.Context, conn net.Conn, params map[string]string, stdin io.R
 	c := &serverConn{conn: conn, r: bufio.NewReader(conn), w: bufio.NewWriter(conn)}
 	const id = 1
 	writeErr := make(chan error, 1)
+	written := make(chan struct{})
 	go func() {
+		defer close(written)
 		err := c.sendRequest(id, params, stdin)
 		writeErr <- err
 		if err != nil {
@@ -42,6 +44,13 @@ func Do(ctx context.Context, conn net.Conn, params map[string]string, stdin io.R
 			// reader wakes and finds err.
 			abort()
 		}
+	}()
+	// The responder may answer before the writer read stdin to its end. The
+	// caller may then read stdin again, as the HTTP router does, so the
+	// writer stops before Do returns.
+	defer func() {
+		abort()
+		<-written
 	}()
 
 	for {

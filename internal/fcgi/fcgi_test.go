@@ -543,7 +543,7 @@ func TestServeIdle(t *testing.T) {
 	// Restored once the server is gone: cleanups run last first.
 	old := serverIdle
 	t.Cleanup(func() { serverIdle = old })
-	serverIdle = 200 * time.Millisecond
+	serverIdle = 500 * time.Millisecond
 	addr := fcgiTestServer(t, func(ctx context.Context, r *Request) int {
 		if r.Params["SLOW"] != "" {
 			time.Sleep(3 * serverIdle)
