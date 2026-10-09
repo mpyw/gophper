@@ -23,12 +23,25 @@ The PHP binaries come from [gophper-wasm](https://github.com/mpyw/gophper-wasm),
 | Command | What it does |
 | --- | --- |
 | `gophper php [php options] [file] [args...]` | The php CLI. Every argument goes to PHP. |
-| `gophper serve [options]` | Serves a PHP app over HTTP or HTTPS, with no web server |
+| `gophper serve [options]` | Serves a PHP app over HTTP or HTTPS, with no web server in front |
 | `gophper fcgi [options]` | A FastCGI server, like php-fpm |
 | `gophper-caddy php-server [options]` | Caddy with gophper built in. Automatic HTTPS. |
 
 > [!TIP]
 > A symlink named `php` that points to `gophper` behaves like `gophper php`.
+
+### Options for every command
+
+Each option also reads an environment variable: `GOPHPER_` and its name in upper snake case.
+For example, `--max-wait-time` reads `GOPHPER_MAX_WAIT_TIME`.
+
+| Option | Meaning |
+| --- | --- |
+| `--extension-dir DIR` | Extensions that `extension=` and `dl()` load. See [Extensions](#extensions). |
+| `--cache-dir DIR` | Where compiled code is kept between runs. Default: the user cache directory. |
+| `--no-cache` | Compile the PHP binaries on every start |
+
+These go before the subcommand: `gophper --extension-dir DIR serve`.
 
 ### CLI
 
@@ -42,42 +55,72 @@ gophper php -r 'echo PHP_VERSION, " ", PHP_OS, "\n";'
 
 The CLI mounts the host file system at `/`. It starts in the current directory.
 
+> [!TIP]
+> `gophper php -S localhost:8000 router.php` runs PHP's built-in development server.
+> It serves one request at a time, in a single instance. Use `gophper serve` for anything more.
+
 ### HTTP
 
 ```sh
-gophper serve --root ./public --listen 127.0.0.1:8080
+gophper serve --root public --listen 127.0.0.1:8080
 ```
 
-Requests are routed like Caddy's `php_server`:
+Each request runs in a fresh PHP instance. Requests are routed like Caddy's `php_server`:
 
 | Request | Result |
 | --- | --- |
-| An existing `.php` file, such as `/admin.php/users/1` | Runs it. The rest of the path is `PATH_INFO`. |
+| A file ending in `.php`, such as `/admin.php/users/1` | Runs it. The rest of the path is `PATH_INFO`. |
 | Another existing file | Sent as is |
-| A directory with `index.php` | Runs that `index.php` |
-| Anything else | Runs the root's `index.php`, the front controller |
+| A directory | Runs its index file |
+| Anything else | Runs the front controller, `index.php` |
+| A path with a segment that starts with `.`, such as `/.env` | 404, except `/.well-known` |
 
 | Option | Meaning |
 | --- | --- |
-| `--listen` | TCP address |
-| `--root` | The document root. PHP can access only this directory. |
-| `--workers` | Max concurrent PHP instances. `0` means the number of CPUs. |
-| `-d key=value` | A php.ini entry. Repeatable. |
-| `--tls-cert`, `--tls-key` | Serve HTTPS with these files |
+| `--listen ADDR` | Default: `127.0.0.1:8080`, or `:443` with `--domain` |
+| `--root DIR` | The document root. It must be inside a `--mount`. Default: `.` |
+| `--router FILE` | Runs for every request, as with `php -S`. If it returns `false`, the file is sent as is. |
+| `--index FILE` | A file a directory runs. Repeatable. Default: `index.php` |
+| `--front-controller FILE` | Runs for paths that are not files. `off` answers 404. Default: `index.php` |
+| `--split-path SUFFIX` | Ends a script's path, before `PATH_INFO`. Repeatable. Default: `.php` |
+| `--no-static` | Answers files other than scripts with 404 |
+| `--max-body SIZE` | Limits request bodies, such as `64M`. `0` means no limit. Default: `64M` |
+| `--domain NAME` | Serves HTTPS with a Let's Encrypt certificate. Also listens on `:80` for the challenge. |
+| `--tls-cert FILE`, `--tls-key FILE` | Serves HTTPS with these files |
+
+For a Laravel-style layout, run from the project directory:
+
+```sh
+cd my-app
+gophper serve --root public
+```
+
+`--mount` defaults to the current directory, so PHP reaches `vendor/` and `storage/` outside `public/`.
+
+> [!WARNING]
+> Laravel itself does not boot yet. It needs `openssl`, `dom` and other extensions that are not built.
 
 ### FastCGI
 
 ```sh
-gophper fcgi --listen 127.0.0.1:9000 --root /var/www -d max_execution_time=30
+gophper fcgi --listen unix:/run/gophper.sock --mount /var/www -d max_execution_time=30
 ```
 
-It takes `--root`, `--workers` and `-d` as `serve` does. `--listen` also accepts `unix:/path/to.sock`.
-Point the web server at it as you would at php-fpm.
+The web server chooses the script, as with php-fpm.
+
+| Option | Meaning | php-fpm equivalent |
+| --- | --- | --- |
+| `--listen ADDR` | TCP address, or `unix:/path/to.sock`. Default: `127.0.0.1:9000` | `listen` |
+| `--listen-mode MODE` | Permissions of a Unix socket. Default: `0660` | `listen.mode` |
+| `--allowed-clients ADDR` | An address or prefix that may connect over TCP. Repeatable. Default: any | `listen.allowed_clients` |
+| `--limit-extensions EXT` | An extension a script may have. Repeatable. Default: `.php` and `.phar` | `security.limit_extensions` |
+| `--ping-path PATH` | Answers `pong` | `ping.path` |
+| `--status-path PATH` | Answers counters as text | `pm.status_path` |
 
 ```nginx
 location ~ \.php(/|$) {
     fastcgi_split_path_info ^(.+\.php)(/.*)$;
-    fastcgi_pass 127.0.0.1:9000;
+    fastcgi_pass unix:/run/gophper.sock;
     include fastcgi_params;
     fastcgi_param SCRIPT_FILENAME $document_root$fastcgi_script_name;
     fastcgi_param PATH_INFO $fastcgi_path_info;
@@ -86,7 +129,25 @@ location ~ \.php(/|$) {
 
 > [!NOTE]
 > Every FastCGI param reaches `$_SERVER` unchanged, including `SCRIPT_NAME` and `PATH_INFO`.
-> Nothing else is added. The host environment is not passed to PHP.
+> `SCRIPT_FILENAME` must be inside a `--mount`.
+
+### Options for serve and fcgi
+
+| Option | Meaning | php-fpm equivalent |
+| --- | --- | --- |
+| `--mount DIR[:ro]` | A directory PHP may access, at the same path. Repeatable. Default: the current directory | |
+| `--temp-dir DIR` | Mounted at `/tmp` inside PHP. Default: the system's | |
+| `--concurrency N` | PHP instances at once. Default: the number of CPUs | `pm.max_children` |
+| `--max-wait-time DURATION` | How long a request waits for a free instance before 503. Default: no limit | |
+| `-c FILE` | A php.ini file. `-d` entries come after it. | |
+| `-d KEY=VALUE` | A php.ini entry. Repeatable. | `php_admin_value` |
+| `-e KEY=VALUE` | An environment variable for PHP. Repeatable. | `env[KEY]` |
+| `--access-log FILE` | Appends an access log. `-` means stdout. | `access.log` |
+
+> [!IMPORTANT]
+> PHP sees only `--mount` directories, `/tmp` and its own php.ini.
+> The host environment is not passed to PHP, as with php-fpm's `clear_env`.
+> The default php.ini sets `variables_order=GPCS`, as `php.ini-production` does.
 
 ### Caddy
 
@@ -97,7 +158,6 @@ go install github.com/mpyw/gophper/caddy/cmd/gophper-caddy@latest
 gophper-caddy php-server --root ./public --domain example.com
 ```
 
-`--domain` listens on the HTTPS port and gets a certificate automatically.
 For a full config, use the `gophper` directive in a Caddyfile:
 
 ```caddyfile
@@ -105,15 +165,23 @@ example.com {
 	encode gzip
 	gophper {
 		root ./public
-		workers 8
-		ini max_execution_time 30
+		mount . ro
+		mount ./storage
+		concurrency 8
+		php_ini max_execution_time 30
+		env APP_ENV production
 	}
 }
 ```
 
-```sh
-gophper-caddy run --config Caddyfile
-```
+| Subdirective | Same as |
+| --- | --- |
+| `root`, `router`, `index`, `split_path`, `temp_dir`, `concurrency`, `max_wait_time`, `env` | The `serve` options |
+| `mount DIR [ro]` | `--mount DIR[:ro]` |
+| `front_controller FILE \| off` | `--front-controller` |
+| `file_server off` | `--no-static`, as in FrankenPHP |
+| `max_body SIZE \| off` | `--max-body` |
+| `php_ini KEY VALUE` | `-d` |
 
 To build your own Caddy, import `github.com/mpyw/gophper/caddy`. It registers the `http.handlers.gophper` module.
 
@@ -160,7 +228,7 @@ code, err := engine.RunCLI(ctx, gophper.Options{
 | Package | Contents |
 | --- | --- |
 | `github.com/mpyw/gophper` | `Engine`: runs the CLI or CGI SAPI once per call |
-| `github.com/mpyw/gophper/server` | `HTTPHandler`, an `http.Handler`, and `FastCGIServer` |
+| `github.com/mpyw/gophper/server` | `HTTPHandler`, an `http.Handler`, and `FastCGIServer`. Both take a `PHPConfig`. |
 | `github.com/mpyw/gophper/caddy` | The Caddy module. A separate Go module, so the core does not depend on Caddy. |
 
 `DefaultEngineConfig` keeps wazero's compiled code in a per-user cache directory.

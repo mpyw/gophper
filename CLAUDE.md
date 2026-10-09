@@ -39,4 +39,9 @@ declscope runs with `.declscope.yaml` (`qualify: ondemand`, `exported: true`). R
 | `llvm-strip` without flags on an extension | It removes the `dylink.0` custom section, and the module then fails with out-of-bounds accesses. Strip with `--strip-debug`. `internal/dylink` rejects a module without `dylink.0`. |
 | Resolving a side module's `read`, `poll` and the rest to php.wasm's exports of those names | Those are the libc originals. php.wasm links them with `--wrap`, so a side module must get the `__wrap_` export, or socket fds break. |
 | One interrupt on cancel | `php_request_startup()` clears the flags, so a cancel before it was lost and a busy loop ran forever. `interruptUntil` raises them again until the run ends. |
+| One `--root` for both the document root and what PHP may access | Laravel's `public/index.php` reads `../vendor`. `--root` is only the document root, and `--mount` (default: the current directory) is what PHP reaches. |
+| Serving every existing file | `.env` and `.git` leaked when the root was a project directory. Any path segment starting with `.` is 404, except `.well-known`, as in Laravel's nginx config. |
+| Running a router as `SCRIPT_FILENAME` | php-cgi cannot report `return false`, and `$_SERVER` would describe the router. `server/bootstrap/router.php` runs it and restores what php -S would set. |
+| Passing router details in variables and unsetting them | With PHP's built-in `variables_order=EGPCS`, `getenv()` returns a copy of `$_ENV` taken at startup, so `putenv()` cannot hide them. The default php.ini sets `GPCS`, as `php.ini-production` does. |
+| FastCGI running any `SCRIPT_FILENAME` | A web server could pass an uploaded file. `LimitExtensions` defaults to `.php` and `.phar`, like php-fpm's `security.limit_extensions`. |
 | Ignoring the wasm binaries in Git | `go build` would need wasi-sdk, bison and re2c. They are committed in gophper-wasm instead. |

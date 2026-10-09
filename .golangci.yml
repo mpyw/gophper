@@ -1,0 +1,125 @@
+version: "2"
+
+# depguard keeps each package to the layer it belongs to. Every rule is an
+# allow list (strict): an import outside it is reported. Rules whose files
+# match all apply, so a file must pass each of them.
+linters:
+  default: none
+  enable:
+    - depguard
+  settings:
+    depguard:
+      rules:
+        everywhere:
+          files:
+            - $all
+          deny:
+            - pkg: C
+              desc: gophper is pure Go; cgo would bring back a C toolchain
+            - pkg: unsafe
+              desc: raw memory belongs to wazero; use api.Memory
+            - pkg: io/ioutil
+              desc: deprecated; use io and os
+            - pkg: github.com/caddyserver
+              desc: Caddy belongs to the separate caddy module, so the core does not depend on it
+
+        # The library does not log by itself. It returns errors, or writes
+        # to an io.Writer its caller passes.
+        library-does-not-log:
+          files:
+            - $all
+            - "!**/cmd/**"
+          deny:
+            - pkg: log
+              desc: return the error, or write to a caller's io.Writer
+            - pkg: log/slog
+              desc: return the error, or write to a caller's io.Writer
+
+        # Package gophper: the Engine. It knows nothing of HTTP or the CLI.
+        core:
+          list-mode: strict
+          files:
+            - $all
+            - "!$test"
+            - "!**/cmd/**"
+            - "!**/internal/**"
+            - "!**/server/**"
+            - "!**/caddy/**"
+          allow:
+            - $gostd
+            - github.com/tetratelabs/wazero
+            - github.com/mpyw/gophper-wasm$
+            - github.com/mpyw/gophper/internal/dylink$
+            - github.com/mpyw/gophper/internal/hostnet$
+
+        # Package server: HTTP and FastCGI on top of the Engine's public API.
+        server:
+          list-mode: strict
+          files:
+            - "**/server/*.go"
+            - "!$test"
+          allow:
+            - $gostd
+            - github.com/tetratelabs/wazero
+            - github.com/mpyw/gophper$
+            - github.com/mpyw/gophper/internal/fcgi$
+
+        # The command wires the public packages together.
+        cmd:
+          list-mode: strict
+          files:
+            - "**/cmd/gophper/*.go"
+          allow:
+            - $gostd
+            - github.com/tetratelabs/wazero
+            - github.com/urfave/cli/v3
+            - golang.org/x/crypto/acme/autocert$
+            - github.com/mpyw/gophper$
+            - github.com/mpyw/gophper/server$
+
+        # The FastCGI protocol stands alone.
+        fcgi:
+          list-mode: strict
+          files:
+            - "**/internal/fcgi/*.go"
+          allow:
+            - $gostd
+
+        # Sockets and DNS for the guest: the standard library and wazero only.
+        hostnet:
+          list-mode: strict
+          files:
+            - "**/internal/hostnet/*.go"
+          allow:
+            - $gostd
+            - github.com/tetratelabs/wazero
+
+        dylink:
+          list-mode: strict
+          files:
+            - "**/internal/dylink/*.go"
+          allow:
+            - $gostd
+            - github.com/tetratelabs/wazero
+            - github.com/mpyw/gophper/internal/dylink/wasmbin$
+
+        # The wasm binary format needs only wazero's value types.
+        wasmbin:
+          list-mode: strict
+          files:
+            - "**/internal/dylink/wasmbin/*.go"
+          allow:
+            - $gostd
+            - github.com/tetratelabs/wazero/api$
+
+        # Tests use the public API, as users would.
+        tests:
+          list-mode: strict
+          files:
+            - $test
+          allow:
+            - $gostd
+            - github.com/tetratelabs/wazero
+            - github.com/mpyw/gophper$
+            - github.com/mpyw/gophper/server$
+            - github.com/mpyw/gophper-wasm/ext$

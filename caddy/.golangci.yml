@@ -1,0 +1,45 @@
+version: "2"
+
+# The caddy module: gophper's public API inside Caddy. See ../.golangci.yml.
+linters:
+  default: none
+  enable:
+    - depguard
+  settings:
+    depguard:
+      rules:
+        everywhere:
+          files:
+            - $all
+          deny:
+            - pkg: C
+              desc: gophper is pure Go; cgo would bring back a C toolchain
+            - pkg: unsafe
+              desc: raw memory belongs to wazero
+            - pkg: io/ioutil
+              desc: deprecated; use io and os
+
+        module:
+          list-mode: strict
+          files:
+            - $all
+            - "!**/cmd/**"
+          allow:
+            - $gostd
+            - github.com/caddyserver/caddy/v2
+            - github.com/caddyserver/certmagic$
+            - github.com/dustin/go-humanize$
+            - github.com/spf13/cobra$
+            - go.uber.org/zap$
+            - github.com/mpyw/gophper$
+            - github.com/mpyw/gophper/server$
+
+        # gophper-caddy: Caddy's command with its standard modules and this one.
+        cmd:
+          list-mode: strict
+          files:
+            - "**/cmd/gophper-caddy/*.go"
+          allow:
+            - github.com/caddyserver/caddy/v2/cmd$
+            - github.com/caddyserver/caddy/v2/modules/standard$
+            - github.com/mpyw/gophper/caddy$

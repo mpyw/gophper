@@ -3,6 +3,7 @@ package gophpercaddy
 import (
 	"encoding/json"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/caddyserver/caddy/v2"
@@ -16,7 +17,7 @@ import (
 func init() {
 	caddycmd.RegisterCommand(caddycmd.Command{
 		Name:  "php-server",
-		Usage: "[--domain <example.com>] [--root <path>] [--listen <addr>] [--workers <n>] [--ini <key=value>]...",
+		Usage: "[--domain <example.com>] [--root <path>] [--listen <addr>] [--mount <dir>]... [--router <file>] [--concurrency <n>] [--ini <key=value>]... [--env <key=value>]...",
 		Short: "Serves a PHP app, with no config file",
 		Long: `
 Serves the PHP app in --root (default: the current directory). Existing
@@ -29,8 +30,11 @@ automatically. Point the domain's DNS records at this machine first.`,
 			cmd.Flags().StringP("domain", "d", "", "Domain name to serve, with automatic HTTPS")
 			cmd.Flags().StringP("root", "r", ".", "The document root")
 			cmd.Flags().StringP("listen", "l", "", "The address to listen on (default :80, or :443 with --domain)")
-			cmd.Flags().IntP("workers", "w", 0, "Max concurrent PHP instances (default: the number of CPUs)")
+			cmd.Flags().StringSlice("mount", nil, "A directory PHP may access, DIR or DIR:ro (repeatable, default: the root)")
+			cmd.Flags().String("router", "", "A script that runs for every request, as with php -S")
+			cmd.Flags().Int("concurrency", 0, "Max PHP instances at once (default: the number of CPUs)")
 			cmd.Flags().StringSlice("ini", nil, "A php.ini entry as key=value (repeatable)")
+			cmd.Flags().StringSlice("env", nil, "An environment variable for PHP as KEY=VALUE (repeatable)")
 			cmd.Flags().BoolP("access-log", "a", false, "Enable the access log")
 			cmd.RunE = caddycmd.WrapCommandFuncForCobra(commandPHPServer)
 		},
@@ -44,16 +48,32 @@ func commandPHPServer(fl caddycmd.Flags) (int, error) {
 	if err != nil {
 		return caddy.ExitCodeFailedStartup, err
 	}
-	workers, err := fl.GetInt("workers")
+	concurrency, err := fl.GetInt("concurrency")
 	if err != nil {
 		return caddy.ExitCodeFailedStartup, err
+	}
+	envs, err := fl.GetStringSlice("env")
+	if err != nil {
+		return caddy.ExitCodeFailedStartup, err
+	}
+	mountFlags, err := fl.GetStringSlice("mount")
+	if err != nil {
+		return caddy.ExitCodeFailedStartup, err
+	}
+	var mounts []HandlerMount
+	for _, m := range mountFlags {
+		dir, ro := strings.CutSuffix(m, ":ro")
+		mounts = append(mounts, HandlerMount{Dir: dir, ReadOnly: ro})
 	}
 
 	route := caddyhttp.Route{
 		HandlersRaw: []json.RawMessage{caddyconfig.JSONModuleObject(Handler{
-			Root:    fl.String("root"),
-			Workers: workers,
-			INI:     ini,
+			Root:        fl.String("root"),
+			Mounts:      mounts,
+			Router:      fl.String("router"),
+			Concurrency: concurrency,
+			INI:         ini,
+			Env:         envs,
 		}, "handler", "gophper", nil)},
 	}
 	if domain != "" {

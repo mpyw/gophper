@@ -12,6 +12,7 @@ import (
 	"net/http"
 	"net/textproto"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -130,6 +131,11 @@ func (c *fcgiClient) do(id uint16, keep bool, params map[string]string, body []b
 
 func startFCGI(t testing.TB, ini ...string) (addr, root string) {
 	t.Helper()
+	return startFCGIWith(t, func(cfg *server.FastCGIConfig) { cfg.INI = ini })
+}
+
+func startFCGIWith(t testing.TB, configure func(*server.FastCGIConfig)) (addr, root string) {
+	t.Helper()
 	ctx, cancel := context.WithCancel(context.Background())
 	engine, err := gophper.NewEngine(ctx, gophper.DefaultEngineConfig())
 	if err != nil {
@@ -139,11 +145,20 @@ func startFCGI(t testing.TB, ini ...string) (addr, root string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	cfg := server.FastCGIConfig{PHPConfig: server.PHPConfig{
+		Mounts:      []server.Mount{{Dir: root}},
+		TempDir:     t.TempDir(),
+		Concurrency: 4,
+	}}
+	configure(&cfg)
+	srv, err := server.NewFastCGIServer(engine, cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	srv := &server.FastCGIServer{Engine: engine, Root: root, TempDir: t.TempDir(), Workers: 4, INI: ini}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
@@ -154,6 +169,7 @@ func startFCGI(t testing.TB, ini ...string) (addr, root string) {
 	t.Cleanup(func() {
 		cancel()
 		<-done
+		srv.Close()
 		engine.Close(context.Background())
 	})
 	return l.Addr().String(), root
@@ -406,4 +422,66 @@ func BenchmarkFastCGI(b *testing.B) {
 			}
 		})
 	})
+}
+
+func TestFastCGILimitExtensions(t *testing.T) {
+	addr, root := startFCGI(t)
+	p := params(root, "GET", "/env.php", nil)
+	p["SCRIPT_FILENAME"] = root + "/env.txt"
+	res, err := dialFCGI(t, addr).do(1, false, p, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != http.StatusForbidden || !strings.Contains(res.Stderr, "has been denied") {
+		t.Errorf("status %d\n%s\n%s", res.Status, res.Body, res.Stderr)
+	}
+}
+
+func TestFastCGIOutsideMounts(t *testing.T) {
+	addr, root := startFCGI(t)
+	p := params(root, "GET", "/index.php", nil)
+	p["SCRIPT_FILENAME"] = "/etc/passwd.php"
+	res, err := dialFCGI(t, addr).do(1, false, p, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != http.StatusNotFound {
+		t.Errorf("status %d\n%s", res.Status, res.Body)
+	}
+}
+
+func TestFastCGIPingStatusAndAccessLog(t *testing.T) {
+	var log bytes.Buffer
+	var mu sync.Mutex
+	addr, root := startFCGIWith(t, func(cfg *server.FastCGIConfig) {
+		cfg.PingPath, cfg.StatusPath = "/ping", "/status"
+		cfg.AccessLog = writerFunc(func(p []byte) (int, error) { mu.Lock(); defer mu.Unlock(); return log.Write(p) })
+	})
+	for path, want := range map[string]string{"/ping": "pong\n", "/status": "accepted requests: 1\n"} {
+		if path == "/status" {
+			// One PHP request first, so the counter moves.
+			if _, err := dialFCGI(t, addr).do(1, false, params(root, "GET", "/index.php", nil), nil); err != nil {
+				t.Fatal(err)
+			}
+		}
+		res, err := dialFCGI(t, addr).do(1, false, params(root, "GET", path, nil), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !strings.Contains(res.Body, want) {
+			t.Errorf("%s: %q", path, res.Body)
+		}
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !regexp.MustCompile(`127\.0\.0\.1 - - \[[^]]+\] "GET /index.php HTTP/1.1" 201 \d+ [0-9.]+s`).Match(log.Bytes()) {
+		t.Errorf("access log:\n%s", log.String())
+	}
+}
+
+func TestFastCGIAllowedClients(t *testing.T) {
+	addr, root := startFCGIWith(t, func(cfg *server.FastCGIConfig) { cfg.AllowedClients = []string{"10.0.0.0/8"} })
+	if _, err := dialFCGI(t, addr).do(1, false, params(root, "GET", "/index.php", nil), nil); err == nil {
+		t.Error("a client outside AllowedClients got a response")
+	}
 }
