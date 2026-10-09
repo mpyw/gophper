@@ -57,6 +57,13 @@ gophper php -r 'echo PHP_VERSION, " ", PHP_OS, "\n";'
 
 The CLI mounts the host file system at `/`. It starts in the current directory.
 
+| php.ini from | How |
+| --- | --- |
+| `/etc/gophper/php.ini` on the host | Read when it exists, as native PHP reads its own |
+| A file | `gophper php -c FILE`, or `PHPRC=FILE` |
+| A directory of `.ini` files | `PHP_INI_SCAN_DIR=DIR` |
+| One setting | `gophper php -d KEY=VALUE` |
+
 > [!TIP]
 > `gophper php -S localhost:8000 router.php` runs PHP's built-in development server.
 > It serves one request at a time, in a single instance. Use `gophper serve` for anything more.
@@ -199,6 +206,7 @@ example.com {
 | `front_controller FILE \| off` | `--front-controller` |
 | `file_server off` | `--no-static`, as in FrankenPHP |
 | `max_body SIZE \| off` | `--max-body` |
+| `php_ini_file FILE` | `-c` |
 | `php_ini KEY VALUE` | `-d` |
 
 To build your own Caddy, import `github.com/mpyw/gophper/caddy`. It registers the `http.handlers.gophper` module.
@@ -317,7 +325,7 @@ Most of it is wazero validating the 16 MB binary, which it does even with the ca
 | Fatal errors, `exit()`, shutdown functions | Works |
 | `max_execution_time`, `set_time_limit()` | Works. The timer runs in Go, since WASI has no signals. |
 | `pcntl`: signals, `pcntl_alarm()`, `pcntl_waitpid()` | Works. `gophper php` passes `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGUSR1` and others to PHP, so `artisan queue:work` stops cleanly. `pcntl_fork()` fails. `pcntl_exec()` runs the program as a child and exits with its status. |
-| opcache | `serve` and `fcgi` keep compiled scripts in a file cache, since each request is a fresh instance. The CLI leaves opcache off, as native PHP does. |
+| opcache | In `serve`, `fcgi` and Caddy, each worker keeps compiled scripts in its own shared memory, 64 MB. A file cache keeps them between workers, and for fresh instances. Raise the size with `-d opcache.memory_consumption=128`. The CLI leaves opcache off, as native PHP does. |
 | Sockets | Tested: TCP clients and servers, UDP and Unix clients, `stream_select`, and the `http://` wrapper |
 | DNS | Works, through Go's resolver |
 | `date`, `pcre`, `hash`, `json`, `random`, `spl`, `uri`, `lexbor` | Works |
@@ -361,7 +369,7 @@ Laravel 13's welcome page with `gophper serve`, one request at a time:
 
 | Mode | Time per request |
 | --- | --- |
-| Workers and opcache's file cache (the default) | 84 ms |
+| Workers, with opcache's shared memory and file cache (the default) | 23 ms |
 | Fresh instances, with the file cache | 100 ms |
 | Fresh instances, without opcache | 160 ms |
 
@@ -370,7 +378,7 @@ Laravel 13's welcome page with `gophper serve`, one request at a time:
 gophper's own code is under the [MIT License](LICENSE).
 
 A gophper binary also contains PHP and the libraries built into it, from gophper-wasm, and Go modules.
-Each keeps its own license. `gophper licenses` prints them all, with the list of Go modules.
+Each keeps its own license. `gophper licenses` prints them all, with the license of each Go module linked in.
 
 > [!IMPORTANT]
 > To distribute a gophper binary, pass on what `gophper licenses` prints.

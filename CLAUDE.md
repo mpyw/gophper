@@ -7,6 +7,7 @@ The Go host that runs PHP from gophper-wasm on wazero. See README.md for the pac
 - The PHP binaries live in github.com/mpyw/gophper-wasm. Its ABI.md is the contract with `engine.go`, `instance.go` and `internal/hostnet`.
 - After an ABI change there, bump `engineABIVersion` in `engine.go` to match `phpwasm.ABIVersion`.
 - To work on both at once, point `go.mod` at the local checkout with `replace github.com/mpyw/gophper-wasm => ../gophper-wasm`, or use a `go.work`.
+- After `go.mod` changes, run `go generate ./cmd/gophper`. It collects the license files of the linked modules for `gophper licenses`, and a test fails without it.
 - Only `cmd/gophper` and `caddy/` may import Caddy. depguard enforces it, so a program that imports the core links no Caddy code.
 
 ## Before you finish
@@ -55,7 +56,7 @@ declscope runs with `.declscope.yaml` (`qualify: ondemand`, `exported: true`). R
 | Keying opcache's file cache by opcache's system id alone | Two builds of one PHP release share it. `Engine.BuildID` hashes the binaries, and the pool's cache directory goes under it. |
 | A fresh PHP instance for every request | Starting one takes 12 ms, more than most requests. Workers run php-cgi in FastCGI mode on a Unix socket, as php-fpm's children do, and `internal/fcgi.Do` sends them requests. `NoWorkers` keeps the old way. |
 | php-cgi's own `PHP_FCGI_MAX_REQUESTS` | It closed the socket under a request that had already connected, which got a 502. The pool counts requests, sets `PHP_FCGI_MAX_REQUESTS=0`, and stops a worker itself. |
-| opcache's shared memory in workers | Laravel took 140 ms instead of 84. The file cache stays the only cache. Not investigated further. |
+| Workers with opcache's file cache only | Laravel took 84 ms, and 23 ms with shared memory. An earlier try with shared memory was slower only because php.wasm had no SHM backend, and opcache recompiled every script. Shared memory is per worker, so `poolOpcacheWorkerINI` sets 64 MB: 128 MB put 4 workers at 1.96 GB RSS. |
 | Interrupting the VM with `interrupt()` for a signal | It sets `EG(timed_out)` too, so a fatal "Maximum execution time" appeared. `wake()` sets only `EG(vm_interrupt)`. A fatal signal is still handled by the guest, which exits quietly with 128 plus the number. |
 | Letting PHP signal any host process | `proc_kill` reaches only the instance's own children. A script cannot kill gophper or other processes. |
 | `caddy/` as a separate Go module with its own `gophper-caddy` binary | Two binaries to install, and two `replace` lines while developing. The Go linker drops packages nobody imports, so one module costs the core nothing. |

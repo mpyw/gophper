@@ -30,8 +30,13 @@ func init() {
 //		temp_dir         <path>
 //		concurrency      <n>
 //		max_wait_time    <duration>
+//		php_ini_file     <path>
 //		php_ini          <key> <value>
 //		env              <key> <value>
+//		opcache          <dir> | off
+//		workers          off
+//		max_requests     <n>
+//		processes        off
 //	}
 //
 // mount, php_ini and env can repeat.
@@ -157,6 +162,8 @@ func (h *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 				}
 				h.MaxWaitTime = caddy.Duration(dur)
 			}
+		case "php_ini_file":
+			h.INIFile, err = one()
 		case "php_ini", "ini", "env":
 			var entry string
 			switch {

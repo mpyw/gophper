@@ -48,6 +48,16 @@ func TestUnmarshalCaddyfile(t *testing.T) {
 			INI:               []string{"display_errors=0", "max_execution_time=30"},
 			Env:               []string{"APP_ENV=production"},
 		}, false},
+		{"php settings", `gophper {
+			php_ini_file /etc/php.ini
+			opcache /var/cache/opcache
+			workers off
+			max_requests 100
+			processes off
+		}`, Handler{INIFile: "/etc/php.ini", OpcacheDir: "/var/cache/opcache", NoWorkers: true, MaxRequests: 100, NoProcesses: true}, false},
+		{"opcache off", `gophper {
+			opcache off
+		}`, Handler{NoOpcache: true}, false},
 		{"front controller and max_body off", `gophper {
 			front_controller app.php
 			max_body off

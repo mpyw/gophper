@@ -13,8 +13,11 @@ package gophpercaddy
 
 import (
 	"context"
+	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -68,6 +71,8 @@ type Handler struct {
 	MaxRequests int `json:"max_requests,omitempty"`
 	// MaxWaitTime is how long a request waits for a free instance before 503.
 	MaxWaitTime caddy.Duration `json:"max_wait_time,omitempty"`
+	// INIFile is a php.ini file. INI comes after it.
+	INIFile string `json:"ini_file,omitempty"`
 	// INI holds php.ini lines such as "max_execution_time=30".
 	INI []string `json:"ini,omitempty"`
 	// Env holds environment variables for PHP, as KEY=VALUE.
@@ -103,6 +108,14 @@ var handlerEngine = sync.OnceValues(func() (*gophper.Engine, error) {
 
 // Provision prepares the handler.
 func (h *Handler) Provision(ctx caddy.Context) error {
+	ini := h.INI
+	if h.INIFile != "" {
+		b, err := os.ReadFile(h.INIFile)
+		if err != nil {
+			return fmt.Errorf("php.ini: %w", err)
+		}
+		ini = append(strings.Split(string(b), "\n"), h.INI...)
+	}
 	engine, err := handlerEngine()
 	if err != nil {
 		return err
@@ -121,7 +134,7 @@ func (h *Handler) Provision(ctx caddy.Context) error {
 			NoWorkers:   h.NoWorkers,
 			MaxRequests: h.MaxRequests,
 			MaxWaitTime: time.Duration(h.MaxWaitTime),
-			INI:         h.INI,
+			INI:         ini,
 			Env:         h.Env,
 			ErrorLog:    zap.NewStdLog(ctx.Logger()).Writer(),
 		},
