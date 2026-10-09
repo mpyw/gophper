@@ -40,8 +40,10 @@ type Signals struct {
 	changed chan struct{}
 	alarm   *time.Timer
 	alarmAt time.Time
-	// grace are the timers that stop a guest slow to act on a fatal signal.
-	grace []*time.Timer
+	// grace stops a guest slow to take a fatal signal, by signal. Taking
+	// it stops the timer: the guest then exits, or holds it blocked or
+	// waited for, as a native process may.
+	grace map[int32]*time.Timer
 	// stopped keeps timers from starting after the run.
 	stopped bool
 	// terminated is a fatal signal the guest did not act on in time.
@@ -77,12 +79,7 @@ func ExportSignals(b wazero.HostModuleBuilder, from func(context.Context) *Signa
 		if s == nil {
 			return 0
 		}
-		s.mu.Lock()
-		defer s.mu.Unlock()
-		p := s.pending
-		s.pending = 0
-		s.fresh = false
-		return int64(p)
+		return int64(s.take())
 	}).Export("sig_take")
 	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, mask int64, timeoutMs int32) int32 {
 		if s := from(ctx); s != nil {
@@ -96,6 +93,22 @@ func ExportSignals(b wazero.HostModuleBuilder, from func(context.Context) *Signa
 		}
 		return 0
 	}).Export("alarm")
+}
+
+// take hands the pending signals to the guest, and stops their grace.
+func (s *Signals) take() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.pending
+	s.pending = 0
+	s.fresh = false
+	for sig, t := range s.grace {
+		if p&(uint64(1)<<sig) != 0 {
+			t.Stop()
+			delete(s.grace, sig)
+		}
+	}
+	return p
 }
 
 // Deliver delivers sig. The guest runs the script's handler, or the
@@ -121,21 +134,31 @@ func (s *Signals) Deliver(sig int32) {
 	if !fatal {
 		return
 	}
-	t := time.AfterFunc(signalGrace, func() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped || s.grace[sig] != nil {
+		// Over, or the grace for this signal runs already.
+		return
+	}
+	var t *time.Timer
+	t = time.AfterFunc(signalGrace, func() {
 		s.mu.Lock()
+		// Taken in the meantime: sig_take stopped it too late.
+		if s.grace[sig] != t {
+			s.mu.Unlock()
+			return
+		}
+		delete(s.grace, sig)
 		if s.terminated == 0 {
 			s.terminated = sig
 		}
 		s.mu.Unlock()
 		s.run.Cancel()
 	})
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.stopped {
-		t.Stop()
-		return
+	if s.grace == nil {
+		s.grace = map[int32]*time.Timer{}
 	}
-	s.grace = append(s.grace, t)
+	s.grace[sig] = t
 }
 
 // Stop cancels the alarm and the grace timers, at the end of the run.

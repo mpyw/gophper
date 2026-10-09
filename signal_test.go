@@ -222,3 +222,19 @@ func TestSignalTerminatesStuckRun(t *testing.T) {
 		t.Errorf("took %s", d)
 	}
 }
+
+// TestSignalBlockedAndWaitedForLives blocks a signal with no handler, waits
+// for it, and goes on past the grace period. Taking it is acting on it, so
+// the host does not end the run, as for a script stuck before taking it.
+func TestSignalBlockedAndWaitedForLives(t *testing.T) {
+	out, exit := runSignals(t, `
+		pcntl_sigprocmask(SIG_BLOCK, [SIGUSR1]);
+		echo "ready\n";
+		pcntl_sigwaitinfo([SIGUSR1], $info);
+		echo "got ", $info["signo"], "\n";
+		sleep(6);
+		echo "alive\n";`, syscall.SIGUSR1)
+	if exit != 0 || out != "ready\ngot 10\nalive\n" {
+		t.Errorf("exit %d\n%s", exit, out)
+	}
+}

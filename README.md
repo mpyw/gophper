@@ -88,7 +88,7 @@ PHP gets nothing of the host unless `Options` says so:
 | `FS` | The directories PHP sees | No file system |
 | `HostPath` | Maps a path inside PHP to its host file, for permissions, owners, locks and child processes | No path has a host file |
 | `Processes` | PHP may start host programs. A child shares a `Stdin` that is a file. For any other, it reads nothing, so PHP keeps it all. | `proc_open` and the rest fail |
-| `Network` | PHP may use TCP, UDP and DNS, as the Go process can. Unix sockets go through `HostPath` instead. | Connections, servers and lookups fail with "Permission denied" or as unknown names |
+| `Network` | PHP may use TCP, UDP and DNS, as the Go process can. Unix sockets go through `HostPath` instead. | Connections and servers fail with "Permission denied", and lookups fail |
 | `MemoryLimit` | Caps PHP's memory in bytes, its own code and data included. `memory_limit` cannot lift it. | WebAssembly's 4 GiB |
 | `Signals` | Signals for PHP, as from `signal.Notify`. Handled ones run the `pcntl` handler. The rest end the run with exit code 128 plus the signal number. | No signals |
 

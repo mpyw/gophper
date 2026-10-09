@@ -37,7 +37,7 @@ func TestSignalsStop(t *testing.T) {
 	if len(s.grace) != 1 || s.alarm == nil {
 		t.Fatalf("grace %d, alarm %v", len(s.grace), s.alarm)
 	}
-	grace, alarm := s.grace[0], s.alarm
+	grace, alarm := s.grace[15], s.alarm
 	s.Stop()
 	if grace.Stop() || alarm.Stop() {
 		t.Error("a timer was still running")
@@ -193,5 +193,36 @@ func TestExportSignals(t *testing.T) {
 		if got := call("alarm", 0); got != 0 {
 			t.Errorf("alarm = %d", got)
 		}
+	}
+}
+
+// TestSignalsTakenNotFatal takes a fatal signal before its grace runs out,
+// as a guest that blocks it and waits for it does. The run goes on.
+func TestSignalsTakenNotFatal(t *testing.T) {
+	signalGrace = 20 * time.Millisecond
+	defer func() { signalGrace = 5 * time.Second }()
+	run := newTestRun(context.Background())
+	s := NewSignals(run)
+	defer s.Stop()
+	s.Deliver(10) // SIGUSR1, with no handler
+	s.Deliver(10) // again: one grace for the signal, not two
+	if len(s.grace) != 1 {
+		t.Fatalf("%d grace timers", len(s.grace))
+	}
+	if got := s.take(); got != 1<<10 {
+		t.Errorf("took %b", got)
+	}
+	time.Sleep(10 * signalGrace)
+	if run.canceled.Load() || s.Terminated() != 0 {
+		t.Errorf("canceled %v, terminated %d", run.canceled.Load(), s.Terminated())
+	}
+	// Not taken: the grace ends the run.
+	s.Deliver(12)
+	deadline := time.Now().Add(10 * time.Second)
+	for !run.canceled.Load() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if s.Terminated() != 12 {
+		t.Errorf("terminated %d, want 12", s.Terminated())
 	}
 }

@@ -32,8 +32,9 @@ type Options struct {
 	// a Stdin that is an *os.File, and reads the null device for any other.
 	Processes bool
 	// Network lets PHP use TCP, UDP and DNS, with the network of the Go
-	// process. Without it, they fail with EACCES, and a name with no
-	// address. Unix sockets go through HostPath instead, as files do.
+	// process. Without it, sockets fail with EACCES, and lookups fail as
+	// a resolver that cannot be reached would. Unix sockets go through
+	// HostPath instead, as files do.
 	Network bool
 	// MemoryLimit caps PHP's linear memory, in bytes: its code and data as
 	// well as what the script allocates. A script that needs more ends with

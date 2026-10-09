@@ -142,6 +142,16 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 	if real, err := filepath.EvalSymlinks(tempDir); err == nil {
 		tempDir = real
 	}
+	if cfg.MemoryLimit < 0 {
+		return nil, fmt.Errorf("memory limit %d is negative", cfg.MemoryLimit)
+	}
+	if cfg.MemoryLimit > 0 {
+		// Each instance would fail to start, request by request. php-cgi -v
+		// tells now, with the cap it would run under.
+		if _, err := engine.RunCGI(context.Background(), gophper.Options{Args: []string{"-v"}, Stdout: io.Discard, Stderr: io.Discard, MemoryLimit: cfg.MemoryLimit}); err != nil {
+			return nil, fmt.Errorf("memory limit: %w", err)
+		}
+	}
 	for _, m := range cfg.Mounts {
 		if !filepath.IsAbs(m.Dir) {
 			return nil, fmt.Errorf("mount %q: not an absolute path", m.Dir)
