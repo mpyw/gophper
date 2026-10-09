@@ -1,8 +1,12 @@
-<p align="center"><img src=".github/assets/icon.png" width="200" alt="A Go gopher riding a purple elephant out of a hexagon"></p>
+<div align="center">
+
+<img src=".github/assets/icon.png" width="200" alt="A Go gopher riding a purple elephant out of a hexagon">
 
 # gophper
 
 Run PHP from Go with no cgo.
+
+</div>
 
 gophper runs php-src, compiled to WebAssembly, on [wazero](https://github.com/tetratelabs/wazero).
 It is the real Zend Engine, so the language behaves exactly like PHP.
@@ -19,6 +23,7 @@ CGO_ENABLED=0 go install github.com/mpyw/gophper/cmd/gophper@latest
 ```
 
 The PHP binaries come from [gophper-wasm](https://github.com/mpyw/gophper-wasm), a Go module that embeds them.
+Its README lists the versions of PHP and of every library inside.
 
 ## Usage
 
@@ -49,11 +54,11 @@ These go before the subcommand: `gophper --extension-dir DIR serve`.
 ### CLI
 
 ```sh
-gophper php -r 'echo PHP_VERSION, " ", PHP_OS, "\n";'
+gophper php -r 'echo "Hello from ", PHP_OS, "\n";'
 ```
 
 ```
-8.6.0RC3 WASI
+Hello from WASI
 ```
 
 The CLI mounts the host file system at `/`. It starts in the current directory.
@@ -217,10 +222,10 @@ These come with gophper:
 | Extension | What it adds |
 | --- | --- |
 | `gd` | Images, with PNG and JPEG |
-| `intl` | ICU 78, with English and Japanese. `extension install intl` also writes ICU's data, 13 MB, beside it. |
+| `intl` | ICU, with English and Japanese. `extension install intl` also writes ICU's data, 13 MB, beside it. |
 | `bz2` | bzip2 |
 | `gmp` | GMP, under the LGPL. See [License](#license). |
-| `redis` | phpredis 6.3, with `session.save_handler=redis` |
+| `redis` | phpredis, with `session.save_handler=redis` |
 | `sodium` | libsodium |
 | `zip` | `ZipArchive`, with AES encryption |
 | `dl_test` | php-src's extension for testing `dl()` |

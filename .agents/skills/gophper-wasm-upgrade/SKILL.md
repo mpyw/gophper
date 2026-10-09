@@ -32,7 +32,6 @@ Then run everything in AGENTS.md's "Before you finish".
 | If the release changed | Also |
 | --- | --- |
 | `ABIVersion` | Set `engineABIVersion` in `engine.go` to it, and implement the host side (below) |
-| `PHPVersion` | Run README's `PHP_VERSION` example again and paste its output |
 | The extensions | README's extension table, and `extension_test.go` |
 
 ## The host side of an ABI change
