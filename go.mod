@@ -3,7 +3,7 @@ module github.com/mpyw/gophper
 go 1.27.1
 
 require (
-	github.com/mpyw/gophper-wasm v0.3.0
+	github.com/mpyw/gophper-wasm v0.4.0
 	github.com/tetratelabs/wazero v1.12.0
 	github.com/urfave/cli/v3 v3.14.0
 	golang.org/x/crypto v0.57.0
