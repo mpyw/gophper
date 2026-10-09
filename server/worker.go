@@ -158,7 +158,7 @@ func (p *pool) poolStart(sock string) (*poolWorker, error) {
 		defer close(w.done)
 		_, err := p.engine.RunCGI(ctx, gophper.Options{
 			Args: []string{"-b", path.Join(poolWorkersDir, filepath.Base(sock))}, Env: env, Stdout: p.errorLog, Stderr: p.errorLog, FS: p.fs,
-			HostPath: p.hostPath, Processes: p.processes,
+			HostPath: p.hostPath, Processes: p.processes, Network: p.network, MemoryLimit: p.memoryLimit,
 		})
 		if err != nil && ctx.Err() == nil {
 			writePoolLog(p.errorLog, "gophper: worker: %v\n", err)

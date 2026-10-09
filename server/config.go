@@ -47,6 +47,14 @@ type PHPConfig struct {
 	// and the rest). Like php-fpm, PHP may start them by default. A child
 	// runs outside the mounts, with the rights of the server.
 	NoProcesses bool
+	// NoNetwork stops PHP from using TCP, UDP and DNS: database servers,
+	// HTTP clients, mail. Like php-fpm, PHP may use them by default. Unix
+	// sockets inside the mounts still work.
+	NoNetwork bool
+	// MemoryLimit caps each PHP instance's linear memory, in bytes, which
+	// memory_limit in php.ini cannot lift. Zero means none below
+	// WebAssembly's own 4 GiB.
+	MemoryLimit int64
 }
 
 // HTTPConfig configures an HTTPHandler.

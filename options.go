@@ -30,6 +30,15 @@ type Options struct {
 	// Processes lets PHP start host programs: proc_open, exec and the rest.
 	// A child runs outside FS, with the rights of the Go process.
 	Processes bool
+	// Network lets PHP use TCP, UDP and DNS, with the network of the Go
+	// process. Without it, they fail with EACCES, and a name with no
+	// address. Unix sockets go through HostPath instead, as files do.
+	Network bool
+	// MemoryLimit caps PHP's linear memory, in bytes: its code and data as
+	// well as what the script allocates. A script that needs more ends with
+	// "Out of memory", which memory_limit cannot lift. Zero means none
+	// below WebAssembly's own 4 GiB.
+	MemoryLimit int64
 	// Functions are PHP functions written in Go, by name. Each becomes an
 	// internal function, which a script calls as any other.
 	Functions map[string]Function

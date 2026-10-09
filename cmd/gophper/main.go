@@ -192,6 +192,16 @@ func phpFlags() []cli.Flag {
 			Usage:   "stop PHP from starting host programs (proc_open, exec and the rest)",
 			Sources: env("NO_PROCESSES"),
 		},
+		&cli.BoolFlag{
+			Name:    "no-network",
+			Usage:   "stop PHP from using TCP, UDP and DNS (Unix sockets still work)",
+			Sources: env("NO_NETWORK"),
+		},
+		&cli.StringFlag{
+			Name:    "memory-max",
+			Usage:   "cap each PHP instance's memory, such as 512M, which memory_limit cannot lift (default: none)",
+			Sources: env("MEMORY_MAX"),
+		},
 		&cli.StringFlag{
 			Name:    "temp-dir",
 			Usage:   "directory mounted at /tmp inside PHP (default: the system's)",
@@ -396,6 +406,7 @@ func phpConfig(cmd *cli.Command) (server.PHPConfig, func() error, error) {
 	cfg := server.PHPConfig{
 		TempDir:     cmd.String("temp-dir"),
 		NoProcesses: cmd.Bool("no-processes"),
+		NoNetwork:   cmd.Bool("no-network"),
 		OpcacheDir:  cmd.String("opcache-dir"),
 		NoWorkers:   cmd.Bool("no-workers"),
 		MaxRequests: cmd.Int("max-requests"),
@@ -403,6 +414,14 @@ func phpConfig(cmd *cli.Command) (server.PHPConfig, func() error, error) {
 		Concurrency: cmd.Int("concurrency"),
 		MaxWaitTime: cmd.Duration("max-wait-time"),
 		Env:         cmd.StringSlice("env"),
+	}
+	if s := cmd.String("memory-max"); s != "" {
+		n, err := parseSize(s)
+		if err != nil {
+			return cfg, nil, fmt.Errorf("--memory-max: %w", err)
+		}
+		// "0" is parseSize's no limit, which MemoryLimit spells 0.
+		cfg.MemoryLimit = max(n, 0)
 	}
 	mounts := cmd.StringSlice("mount")
 	if len(mounts) == 0 {
@@ -469,6 +488,7 @@ func phpAction(ctx context.Context, cmd *cli.Command) (err error) {
 		FS:        gophper.HostFS(),
 		HostPath:  gophper.HostPaths,
 		Processes: true,
+		Network:   true,
 		Signals:   signals,
 	})
 	if err != nil {

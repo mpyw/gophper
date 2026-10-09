@@ -419,3 +419,30 @@ func TestTimeoutOnOneProcessor(t *testing.T) {
 		t.Errorf("exit %d, err %v\n%s", code, err, out.String())
 	}
 }
+
+// TestEngineMemoryLimit ends a script that needs more than MemoryLimit
+// with "Out of memory", which memory_limit cannot lift. The Go process goes
+// on, and the next run is not limited.
+func TestEngineMemoryLimit(t *testing.T) {
+	e := newTestEngine(t)
+	var out bytes.Buffer
+	code, err := e.RunCLI(context.Background(), gophper.Options{
+		Args:        []string{"-d", "memory_limit=-1", "-r", `echo "start\n"; $s = str_repeat("x", 200 << 20); echo "done\n";`},
+		Stdout:      &out,
+		Stderr:      &out,
+		MemoryLimit: 96 << 20,
+	})
+	if err != nil || code != 255 || !strings.Contains(out.String(), "Fatal error: Out of memory") || strings.Contains(out.String(), "done") {
+		t.Errorf("exit %d, %v\n%s", code, err, out.String())
+	}
+	// More than the limit above, under php.ini's own 128M.
+	if got := runEngineCLI(t, e, `echo strlen(str_repeat("x", 100 << 20));`); got != "104857600" {
+		t.Errorf("unlimited: %q", got)
+	}
+	// Too little to start PHP at all, or less than nothing.
+	for _, limit := range []int64{1 << 20, -1} {
+		if _, err := e.RunCLI(context.Background(), gophper.Options{Args: []string{"-r", "echo 1;"}, MemoryLimit: limit}); err == nil {
+			t.Errorf("MemoryLimit %d: no error", limit)
+		}
+	}
+}

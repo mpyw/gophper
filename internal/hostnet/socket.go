@@ -105,6 +105,9 @@ type Sockets struct {
 	// hostPath maps the path of a Unix socket to the host, as Options.HostPath
 	// does for files. Nil maps none.
 	hostPath SocketsHostPath
+	// network lets PHP use TCP and UDP, and DNS through ExportDNS. Without
+	// it, they fail with EACCES, as a firewall would make them.
+	network bool
 	// names maps the host paths of Unix sockets back to the paths PHP gave.
 	// A mount can put a path elsewhere, as the server does with /tmp.
 	namesMu sync.Mutex
@@ -122,9 +125,15 @@ type SocketsHostPath func(path string) (host string, writable, ok bool)
 // NewSockets returns an empty table for one PHP instance. A Unix socket's
 // path goes through hostPath, as a file's does: a sandbox reaches no host
 // socket, such as Docker's.
-func NewSockets(run wasi.Run, hostPath SocketsHostPath) *Sockets {
-	return &Sockets{run: run, hostPath: hostPath, entries: map[int32]*socketEntry{}, changed: make(chan struct{})}
+func NewSockets(run wasi.Run, hostPath SocketsHostPath, network bool) *Sockets {
+	return &Sockets{run: run, hostPath: hostPath, network: network, entries: map[int32]*socketEntry{}, changed: make(chan struct{})}
 }
+
+// Network reports whether PHP may use TCP, UDP and DNS.
+func (t *Sockets) Network() bool { return t.network }
+
+// Run is the run the sockets belong to.
+func (t *Sockets) Run() wasi.Run { return t.run }
 
 // unixHost maps the path of a Unix socket. bind creates the file, so it
 // needs a writable path.
@@ -499,6 +508,8 @@ func (x socketExports) connect(ctx context.Context, m api.Module, fd int32, addr
 			return errno
 		}
 		addr = host
+	} else if !t.network {
+		return wasi.EACCES
 	}
 
 	if e.datagram() {
@@ -573,6 +584,8 @@ func (x socketExports) bind(ctx context.Context, m api.Module, fd int32, addrPtr
 			return errno
 		}
 		addr = host
+	} else if !t.network {
+		return wasi.EACCES
 	}
 	if e.datagram() {
 		pc, err := net.ListenPacket(e.network(), addr)
@@ -607,6 +620,9 @@ func (x socketExports) listen(ctx context.Context, fd, backlog int32) int32 {
 			return wasi.EINVAL
 		}
 		addr = ":0"
+	}
+	if e.kind != socketUnix && !t.network {
+		return wasi.EACCES
 	}
 	ln, err := (&net.ListenConfig{}).Listen(t.run.Context(), e.network(), addr)
 	if err != nil {
@@ -770,6 +786,10 @@ func (x socketExports) send(ctx context.Context, m api.Module, fd int32, bufPtr 
 			if e.kind != socketUDP {
 				t.mu.Unlock()
 				return -wasi.ENOTSUP
+			}
+			if !t.network {
+				t.mu.Unlock()
+				return -wasi.EACCES
 			}
 			// sendto(2) on an unbound socket binds it to an ephemeral port.
 			pc, err := net.ListenPacket("udp", ":0")

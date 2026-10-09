@@ -19,7 +19,8 @@ const (
 )
 
 func newDNSExports(run wasi.Run) dnsExports {
-	return dnsExports{from: func(context.Context) wasi.Run { return run }}
+	t := NewSockets(run, nil, true)
+	return dnsExports{from: func(context.Context) *Sockets { return t }}
 }
 
 func TestDNSReverse(t *testing.T) {
@@ -354,5 +355,29 @@ func TestDNSQueryAnswers(t *testing.T) {
 		if (c.want == 0 && got <= 12) || (c.want != 0 && got != c.want) {
 			t.Errorf("%s: %d, want %d", c.name, got, c.want)
 		}
+	}
+}
+
+// TestDNSNoNetwork answers every lookup as failed, with no query sent.
+func TestDNSNoNetwork(t *testing.T) {
+	m := newGuest(t)
+	tab := NewSockets(newGuestRun(t), nil, false)
+	x := dnsExports{from: func(context.Context) *Sockets { return tab }}
+	p, n := guestString(t, m, dnsTestNameOff, "example.com")
+	if r := x.lookup(context.Background(), m, p, n, 0, dnsTestOutOff, 512); r != -2 {
+		t.Errorf("lookup = %d, want -2 (EAI_FAIL)", r)
+	}
+	p, n = guestString(t, m, dnsTestNameOff, "127.0.0.1")
+	if r := x.reverse(context.Background(), m, p, n, dnsTestOutOff, 512); r != -1 {
+		t.Errorf("reverse = %d, want -1", r)
+	}
+	p, n = guestString(t, m, dnsTestNameOff, "example.com")
+	if r := x.query(context.Background(), m, p, n, 1, 1, dnsTestOutOff, 512); r != -dnsNoRecovery {
+		t.Errorf("query = %d, want %d", r, -dnsNoRecovery)
+	}
+	// Outside any instance, as from returns nil.
+	none := dnsExports{from: func(context.Context) *Sockets { return nil }}
+	if r := none.lookup(context.Background(), m, p, n, 0, dnsTestOutOff, 512); r != -2 {
+		t.Errorf("no instance: lookup = %d", r)
 	}
 }

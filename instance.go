@@ -31,13 +31,14 @@ type engineInstance struct {
 
 func newEngineInstance(ctx context.Context, cancel context.CancelFunc, extensions *dylink.Cache, binDir string, opts Options) *engineInstance {
 	vm := hostvm.NewVM(ctx, cancel)
+	vm.MemoryLimit = uint64(opts.MemoryLimit)
 	inst := &engineInstance{vm: vm, signals: hostsig.NewSignals(vm), linker: dylink.NewLinker(extensions)}
 	vm.Pending = inst.signals.Pending
 	hostPath := opts.HostPath
 	if hostPath == nil {
 		hostPath = func(string) (string, bool, bool) { return "", false, false }
 	}
-	inst.sockets = hostnet.NewSockets(vm, hostnet.SocketsHostPath(hostPath))
+	inst.sockets = hostnet.NewSockets(vm, hostnet.SocketsHostPath(hostPath), opts.Network)
 	inst.processes = hostproc.NewProcesses(vm, inst.sockets, opts.Processes, hostPath, binDir, opts.Stdin, opts.Stdout, opts.Stderr)
 	inst.system = hostsys.NewSystem(vm, hostPath)
 	fns := make(map[string]hostfn.Function, len(opts.Functions))

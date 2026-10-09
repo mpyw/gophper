@@ -55,7 +55,8 @@ func newExtensionEngine(t *testing.T) *gophper.Engine {
 func runExtension(t *testing.T, e *gophper.Engine, args ...string) (string, int) {
 	t.Helper()
 	var out bytes.Buffer
-	code, err := e.RunCLI(context.Background(), gophper.Options{Args: args, Stdout: &out, Stderr: &out})
+	// With the network, as redis connects over TCP.
+	code, err := e.RunCLI(context.Background(), gophper.Options{Args: args, Stdout: &out, Stderr: &out, Network: true})
 	if err != nil {
 		t.Fatal(err)
 	}

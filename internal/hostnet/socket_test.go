@@ -48,7 +48,7 @@ type socketHarness struct {
 func newSocketHarness(t *testing.T) *socketHarness {
 	t.Helper()
 	run := newGuestRun(t)
-	tab := NewSockets(run, func(path string) (string, bool, bool) { return path, true, true })
+	tab := NewSockets(run, func(path string) (string, bool, bool) { return path, true, true }, true)
 	t.Cleanup(tab.Close)
 	return &socketHarness{
 		t:   t,

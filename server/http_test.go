@@ -5,7 +5,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -550,5 +552,59 @@ func TestHTTPRunsHostPrograms(t *testing.T) {
 	srv := startHTTPWith(t, func(cfg *server.HTTPConfig) { cfg.Root = root })
 	if res, body := get(t, srv.URL+"/"); res.StatusCode != 200 || body != "hi\nby path\n" {
 		t.Errorf("%d %q", res.StatusCode, body)
+	}
+}
+
+// TestHTTPNetworkAndMemory lets PHP use the network unless NoNetwork, and
+// ends a request that needs more than MemoryLimit, which the next request
+// does not feel.
+func TestHTTPNetworkAndMemory(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Close() }()
+	go func() {
+		for {
+			c, err := l.Accept()
+			if err != nil {
+				return
+			}
+			_, _ = c.Write([]byte("hello")) // the client may be gone
+			_ = c.Close()
+		}
+	}()
+	root := t.TempDir()
+	for name, src := range map[string]string{
+		"net.php": fmt.Sprintf(`<?php $c = @stream_socket_client("tcp://%s", $no, $str, 5); echo $c ? fread($c, 5) : $str;`, l.Addr()),
+		"big.php": `<?php ini_set("memory_limit", "-1"); echo strlen(str_repeat("x", 200 << 20));`,
+		"ok.php":  `<?php echo "ok";`,
+	} {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tt := range []struct {
+		noNetwork bool
+		want      string
+	}{
+		{false, "hello"},
+		{true, "Permission denied"},
+	} {
+		srv := startHTTPWith(t, func(cfg *server.HTTPConfig) {
+			cfg.Root = root
+			cfg.NoNetwork = tt.noNetwork
+			cfg.MemoryLimit = 96 << 20
+		})
+		if _, body := get(t, srv.URL+"/net.php"); body != tt.want {
+			t.Errorf("NoNetwork %v: %q, want %q", tt.noNetwork, body, tt.want)
+		}
+		// A fatal error, which php-cgi shows with display_errors on.
+		if _, body := get(t, srv.URL+"/big.php"); !strings.Contains(body, "Out of memory") || strings.Contains(body, "209715200") {
+			t.Errorf("past MemoryLimit: %q", body)
+		}
+		if _, body := get(t, srv.URL+"/ok.php"); body != "ok" {
+			t.Errorf("after: %q", body)
+		}
 	}
 }

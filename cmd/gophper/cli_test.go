@@ -454,7 +454,8 @@ echo json_encode([
 	s := cliStart(t, dir, "serve", "--listen", "127.0.0.1:0", "--root", "public",
 		"--mount", ".", "--mount", ro+":ro", "--env", "APP_ENV=test",
 		"-c", "php.ini", "-d", "memory_limit=99M", "--temp-dir", t.TempDir(),
-		"--concurrency", "2", "--max-wait-time", "5s", "--no-opcache", "--access-log", log)
+		"--concurrency", "2", "--max-wait-time", "5s", "--no-opcache", "--access-log", log,
+		"--no-network", "--memory-max", "512M")
 	code, body := cliGet(t, http.DefaultClient, "http://"+s.addr+"/")
 	want := `{"env":"test","memory_limit":"99M","max_execution_time":"7","ro":"read-only","tmp":true,"opcache":false}`
 	if code != 200 || body != want {
@@ -618,6 +619,7 @@ func TestCLIServeErrors(t *testing.T) {
 		{"cert without key", []string{"--tls-cert", "x.pem"}, "go together"},
 		{"domain and cert", []string{"--domain", "example.com", "--tls-cert", "x", "--tls-key", "y"}, "drop --tls-cert"},
 		{"bad body size", []string{"--max-body", "lots"}, "--max-body"},
+		{"bad memory cap", []string{"--memory-max", "lots"}, "--memory-max"},
 		{"bad env", []string{"--env", "NOEQUALS"}, "key=value"},
 		{"missing php.ini", []string{"-c", "missing.ini"}, "missing.ini"},
 		{"root outside mounts", []string{"--root", "/", "--mount", dir}, "mount"},

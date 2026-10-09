@@ -38,6 +38,9 @@ type VM struct {
 	// Pending reports whether a signal waits for the guest. Nanosleep
 	// returns at once then. Nil means none ever does.
 	Pending func() bool
+	// MemoryLimit caps the linear memory, in bytes, below the module's own
+	// maximum. Zero means that maximum only. Set it before Allocate.
+	MemoryLimit uint64
 
 	// Addresses of EG(vm_interrupt), EG(timed_out) and EG(hard_timeout).
 	vmInterrupt, timedOut, hardTimeout uint32
@@ -72,6 +75,12 @@ func ExportVM(b wazero.HostModuleBuilder, from func(context.Context) *VM) {
 
 // Allocate implements experimental.MemoryAllocator.
 func (v *VM) Allocate(capacity, max uint64) experimental.LinearMemory {
+	if v.MemoryLimit > 0 {
+		// A memory.grow past it fails, so PHP's allocator reports "Out of
+		// memory" and the script ends, as it would at the module's maximum.
+		max = min(max, v.MemoryLimit)
+		capacity = min(capacity, max)
+	}
 	v.memory.buf = make([]byte, 0, capacity)
 	v.memory.max = max
 	return &v.memory

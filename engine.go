@@ -26,7 +26,6 @@ import (
 	"github.com/mpyw/gophper/internal/hostsig"
 	"github.com/mpyw/gophper/internal/hostsys"
 	"github.com/mpyw/gophper/internal/hostvm"
-	"github.com/mpyw/gophper/internal/wasi"
 )
 
 // engineABIVersion is the phpwasm.ABIVersion this host implements.
@@ -91,7 +90,7 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 	hostproc.ExportProcesses(host, engineFrom(func(i *engineInstance) *hostproc.Processes { return i.processes }))
 	hostsys.ExportSystem(host, engineFrom(func(i *engineInstance) *hostsys.System { return i.system }))
 	hostfn.ExportFunctions(host, engineFrom(func(i *engineInstance) *hostfn.Functions { return i.functions }))
-	hostnet.ExportDNS(host, engineFrom(func(i *engineInstance) wasi.Run { return i.vm }))
+	hostnet.ExportDNS(host, engineFrom(func(i *engineInstance) *hostnet.Sockets { return i.sockets }))
 	if _, err := host.Instantiate(ctx); err != nil {
 		return nil, errors.Join(err, e.Close(ctx))
 	}
@@ -195,10 +194,19 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 	e.mu.Unlock()
 	defer e.runs.Done()
 	opts.Stdin = engineSharedStdin(opts.Stdin)
+	if opts.MemoryLimit < 0 {
+		return 0, fmt.Errorf("gophper: MemoryLimit %d is negative", opts.MemoryLimit)
+	}
 
 	mod, err := compiled()
 	if err != nil {
 		return 0, err
+	}
+	// wazero cannot fail the first allocation, only a later memory.grow.
+	for _, mem := range mod.ExportedMemories() {
+		if need := uint64(mem.Min()) * 65536; opts.MemoryLimit > 0 && uint64(opts.MemoryLimit) < need {
+			return 0, fmt.Errorf("gophper: MemoryLimit %d is below the %d bytes PHP starts with", opts.MemoryLimit, need)
+		}
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()

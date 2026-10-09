@@ -35,6 +35,7 @@ func runPHP(t *testing.T, code string) (string, int) {
 		FS:        gophper.HostFS(),
 		HostPath:  gophper.HostPaths,
 		Processes: true,
+		Network:   true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -573,4 +574,74 @@ func netShortTempBase() string {
 		return ""
 	}
 	return "/tmp"
+}
+
+// TestNetworkOff runs with the zero Options: TCP, UDP, DNS, listening and
+// the http:// wrapper all fail, as behind a firewall, and nothing reaches
+// the host. Each fails at once, with EACCES where there is an errno.
+func TestNetworkOff(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = l.Close() }()
+	accepted := make(chan struct{}, 1)
+	go func() {
+		if c, err := l.Accept(); err == nil {
+			accepted <- struct{}{}
+			_ = c.Close()
+		}
+	}()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pc.Close() }()
+	var out bytes.Buffer
+	start := time.Now()
+	_, err = newTestEngine(t).RunCLI(context.Background(), gophper.Options{
+		Args: []string{"-r", fmt.Sprintf(`
+			$tcp = @stream_socket_client("tcp://%[1]s", $errno, $errstr, 5);
+			echo "tcp: ", var_export($tcp, true), " $errstr\n";
+			$udp = @stream_socket_client("udp://%[2]s", $errno, $errstr, 5);
+			echo "udp: ", var_export($udp, true), " $errstr\n";
+			$bound = @stream_socket_server("udp://127.0.0.1:0", $errno, $errstr, STREAM_SERVER_BIND);
+			echo "udp bind: ", var_export($bound, true), " $errstr\n";
+			$srv = @stream_socket_server("tcp://127.0.0.1:0", $errno, $errstr);
+			echo "server: ", var_export($srv, true), " $errstr\n";
+			echo "dns: ", gethostbyname("example.com"), "\n";
+			echo "records: ", var_export(@dns_get_record("example.com", DNS_A), true), "\n";
+			echo "http: ", var_export(@file_get_contents("http://%[1]s/"), true), "\n";`,
+			l.Addr(), pc.LocalAddr())},
+		Stdout: &out,
+		Stderr: &out,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := strings.Join([]string{
+		"tcp: false Permission denied",
+		"udp: false Permission denied",
+		"udp bind: false Permission denied",
+		"server: false Permission denied",
+		"dns: example.com",
+		"records: false",
+		"http: false",
+		"",
+	}, "\n")
+	if out.String() != want {
+		t.Errorf("got:\n%s\nwant:\n%s", out.String(), want)
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("took %s: something waited", d)
+	}
+	select {
+	case <-accepted:
+		t.Error("the TCP connection reached the host")
+	default:
+	}
+	_ = pc.SetReadDeadline(time.Now().Add(100 * time.Millisecond))
+	if n, _, err := pc.ReadFrom(make([]byte, 16)); err == nil {
+		t.Errorf("a datagram of %d bytes reached the host", n)
+	}
 }

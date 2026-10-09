@@ -14,7 +14,10 @@ import (
 // ExportDNS adds the resolver host functions, used by getaddrinfo(3) and
 // friends in gophper-wasm's compat/gophper_net.c. from returns the instance a call
 // comes from, so a lookup stops at its interrupts.
-func ExportDNS(b wazero.HostModuleBuilder, from func(context.Context) wasi.Run) {
+//
+// The lookups fail, with no query sent, for an instance whose Sockets has
+// no network.
+func ExportDNS(b wazero.HostModuleBuilder, from func(context.Context) *Sockets) {
 	x := dnsExports{from: from}
 	b.NewFunctionBuilder().WithFunc(x.lookup).Export("dns_lookup")
 	b.NewFunctionBuilder().WithFunc(x.reverse).Export("dns_reverse")
@@ -22,7 +25,16 @@ func ExportDNS(b wazero.HostModuleBuilder, from func(context.Context) wasi.Run) 
 }
 
 type dnsExports struct {
-	from func(context.Context) wasi.Run
+	from func(context.Context) *Sockets
+}
+
+// run returns the run a call comes from, and whether it may use DNS.
+func (x dnsExports) run(ctx context.Context) (wasi.Run, bool) {
+	t := x.from(ctx)
+	if t == nil {
+		return nil, false
+	}
+	return t.Run(), t.Network()
 }
 
 // lookup writes name's addresses as lines of text. family is 4, 6 or 0
@@ -37,7 +49,11 @@ func (x dnsExports) lookup(ctx context.Context, m api.Module, namePtr, nameLen u
 	case 6:
 		network = "ip6"
 	}
-	lctx, cancel := interruptibleRunContext(x.from(ctx))
+	run, ok := x.run(ctx)
+	if !ok {
+		return -2 // EAI_FAIL: no use asking again
+	}
+	lctx, cancel := interruptibleRunContext(run)
 	defer cancel()
 	ips, err := net.DefaultResolver.LookupIP(lctx, network, string(name))
 	if err != nil {
@@ -60,7 +76,11 @@ func (x dnsExports) lookup(ctx context.Context, m api.Module, namePtr, nameLen u
 // reverse writes the first name for an address, or returns -1.
 func (x dnsExports) reverse(ctx context.Context, m api.Module, addrPtr, addrLen, outPtr, outCap uint32) int32 {
 	addr, _ := m.Memory().Read(addrPtr, addrLen)
-	lctx, cancel := interruptibleRunContext(x.from(ctx))
+	run, ok := x.run(ctx)
+	if !ok {
+		return -1
+	}
+	lctx, cancel := interruptibleRunContext(run)
 	defer cancel()
 	names, err := net.DefaultResolver.LookupAddr(lctx, string(addr))
 	if err != nil || len(names) == 0 {

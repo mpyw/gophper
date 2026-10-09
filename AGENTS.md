@@ -9,7 +9,7 @@ The Go host that runs PHP from gophper-wasm on wazero. See README.md for the pac
 - gophper-wasm's branches hold no binaries. Test against a local checkout only after building it (`gophper-wasm-upgrade` skill).
 - After `go.mod` changes, run `go generate ./cmd/gophper`. It collects the licenses of the linked modules for `gophper licenses`, and a test fails without it.
 - Check every error, or drop it with `_ =` and a comment saying why. errcheck runs with none of its default exclusions, in tests too. A diagnostic log goes through one helper per package (`writePoolLog`, `logf`) that drops write errors in one place.
-- Library users get a sandbox: host paths, processes and the rest stay off in `Options` unless set. The CLI and `server` turn them on.
+- Library users get a sandbox: host paths, processes, the network and the rest stay off in `Options` unless set. The CLI and `server` turn them on.
 
 ## Skills
 

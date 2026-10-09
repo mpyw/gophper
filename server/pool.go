@@ -40,6 +40,9 @@ type pool struct {
 	opcacheDir string
 	//declscope:private
 	processes bool
+	// network and memoryLimit go to each instance's Options.
+	network     bool
+	memoryLimit int64
 	//declscope:private
 	env []string
 	//declscope:private
@@ -213,19 +216,21 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 	}
 
 	p := &pool{
-		engine:     engine,
-		fs:         fs,
-		mounts:     cfg.Mounts,
-		tempDir:    tempDir,
-		opcacheDir: opcacheDir,
-		processes:  !cfg.NoProcesses,
-		env:        cfg.Env,
-		iniDir:     iniDir,
-		sem:        make(chan struct{}, concurrency),
-		maxWait:    cfg.MaxWaitTime,
-		errorLog:   cfg.ErrorLog,
-		accessLog:  cfg.AccessLog,
-		started:    time.Now(),
+		engine:      engine,
+		fs:          fs,
+		mounts:      cfg.Mounts,
+		tempDir:     tempDir,
+		opcacheDir:  opcacheDir,
+		processes:   !cfg.NoProcesses,
+		network:     !cfg.NoNetwork,
+		memoryLimit: cfg.MemoryLimit,
+		env:         cfg.Env,
+		iniDir:      iniDir,
+		sem:         make(chan struct{}, concurrency),
+		maxWait:     cfg.MaxWaitTime,
+		errorLog:    cfg.ErrorLog,
+		accessLog:   cfg.AccessLog,
+		started:     time.Now(),
 	}
 	if p.errorLog == nil {
 		p.errorLog = os.Stderr
@@ -326,7 +331,7 @@ func (p *pool) run(ctx context.Context, vars map[string]string, stdin io.Reader,
 	}
 	return p.engine.RunCGI(ctx, gophper.Options{
 		Env: env, Stdin: stdin, Stdout: stdout, Stderr: stderr, FS: p.fs,
-		HostPath: p.hostPath, Processes: p.processes,
+		HostPath: p.hostPath, Processes: p.processes, Network: p.network, MemoryLimit: p.memoryLimit,
 	})
 }
 

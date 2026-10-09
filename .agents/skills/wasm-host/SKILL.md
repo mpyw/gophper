@@ -25,7 +25,8 @@ The root package is the public API and the wiring. Everything else is in `intern
 
 ## Rules
 
-- Off by default: a library user who passes nothing gets a sandbox. The CLI and `server` turn host access on.
+- Off by default: a library user who passes nothing gets a sandbox. The CLI and `server` turn host access on. That covers files, processes and the network (TCP, UDP and DNS). Unix sockets follow `HostPath`.
+- A new way out of the sandbox gets a gate in `Options`, and a test with the zero `Options`, as `TestNetworkOff` does.
 - A blocking host call must wake on an interrupt (`EINTR`) and give up once the run is over (`EIO`).
 - PHP must never block on a writer the host holds. Pipes and stdout keep draining.
 
@@ -48,6 +49,9 @@ The root package is the public API and the wiring. Everything else is in `intern
 | A symlink to gophper as `PHP_BINARY` | PHP resolves `PHP_BINARY` with `realpath`, which drops the name `php` that selects the subcommand. `cmd/gophper/phpbinary.go` writes a shell script instead. |
 | Giving a child the instance's stdout as is | In `serve`, it is the HTTP response, and a child may outlive the request. `hostproc` hands children a writer that drops output once the run is over. |
 | Host paths and processes on by default in `Options` | A library user who mounts only `/app` expects a sandbox. `HostPath` and `Processes` are off unless set, and the CLI and `server` set them. |
+| TCP, UDP and DNS open with the zero `Options` | The sandbox leaked: `file_get_contents('http://169.254.169.254/')` and a PDO connection to an internal database worked. `Network` is off unless set. Without it, sockets fail with `EACCES`, as behind a firewall, and lookups as unknown names. |
+| Dial and Listen hooks in place of `Network bool` | A hook would let a caller allow some destinations only. The smaller API was chosen: a bool closes the sandbox, and a firewall or proxy can filter destinations. Hooks can still come later, beside the bool. |
+| A memory cap with wazero's `RuntimeConfig.WithMemoryLimitPages` | It is per engine, so every run would share one cap. `hostvm` allocates each run's linear memory, so `Options.MemoryLimit` caps a run's `memory.grow` there. Below the module's initial memory, wazero would panic on the first allocation, so the run fails before it. |
 | Interrupting the VM with `VM.Interrupt` for a signal | It sets `EG(timed_out)` too, so a fatal "Maximum execution time" appeared. `VM.Wake` sets only `EG(vm_interrupt)`. A fatal signal is still handled by the guest, which exits quietly with 128 plus the number. |
 | Letting PHP signal any host process | `proc_kill` reaches only the instance's own children. A script cannot kill gophper or other processes. |
 | Naming a Unix socket by `hostpath.Guest` of its host path | A mount can put a path elsewhere, as `server` does with `/tmp`. `stream_socket_get_name` then showed the host path. `Sockets` keeps the path PHP gave for each host path. |

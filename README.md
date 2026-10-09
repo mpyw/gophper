@@ -88,6 +88,8 @@ PHP gets nothing of the host unless `Options` says so:
 | `FS` | The directories PHP sees | No file system |
 | `HostPath` | Maps a path inside PHP to its host file, for permissions, owners, locks and child processes | No path has a host file |
 | `Processes` | PHP may start host programs | `proc_open` and the rest fail |
+| `Network` | PHP may use TCP, UDP and DNS, as the Go process can. Unix sockets go through `HostPath` instead. | Connections, servers and lookups fail with "Permission denied" or as unknown names |
+| `MemoryLimit` | Caps PHP's memory in bytes, its own code and data included. `memory_limit` cannot lift it. | WebAssembly's 4 GiB |
 | `Signals` | Signals for PHP, as from `signal.Notify`. Handled ones run the `pcntl` handler. The rest end the run with exit code 128 plus the signal number. | No signals |
 
 `DefaultEngineConfig` keeps a per-user cache directory: wazero's compiled code, and the PHP binaries decompressed.
@@ -233,6 +235,8 @@ location ~ \.php(/|$) {
 | `--mount DIR[:ro]` | A directory PHP may access, at the same path. Repeatable. Default: the current directory | |
 | `--temp-dir DIR` | Mounted at `/tmp` inside PHP. Default: the system's | |
 | `--no-processes` | Stops PHP from starting host programs (`proc_open`, `exec` and the rest) | `disable_functions` |
+| `--no-network` | Stops PHP from using TCP, UDP and DNS. Unix sockets inside the mounts still work. | |
+| `--memory-max SIZE` | Caps each PHP instance's memory, such as `512M`. `memory_limit` cannot lift it. Default: none | |
 | `--no-workers` | Starts a fresh PHP instance for each request | |
 | `--max-requests N` | Requests a worker serves before it is replaced. Default: 500 | `pm.max_requests` |
 | `--opcache-dir DIR` | Where opcache keeps compiled scripts between requests. Default: the user cache directory | |
@@ -252,6 +256,7 @@ location ~ \.php(/|$) {
 > [!WARNING]
 > A child process runs outside the mounts, with the rights of the server.
 > PHP may start one by default, as with php-fpm. Use `--no-processes` to stop it.
+> PHP may also reach the server's network by default, as with php-fpm. Use `--no-network` to stop it.
 
 ### Extensions
 

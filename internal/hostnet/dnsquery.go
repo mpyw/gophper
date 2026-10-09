@@ -38,7 +38,11 @@ func (x dnsExports) query(ctx context.Context, m api.Module, namePtr, nameLen ui
 	if err != nil {
 		return -dnsNoRecovery
 	}
-	qctx, cancel := interruptibleRunContext(x.from(ctx))
+	run, ok := x.run(ctx)
+	if !ok {
+		return -dnsNoRecovery
+	}
+	qctx, cancel := interruptibleRunContext(run)
 	defer cancel()
 
 	var answer []byte
