@@ -94,9 +94,21 @@ PHP gets nothing of the host unless `Options` says so:
 | `Signals` | Signals for PHP, as from `signal.Notify`. Handled ones run the `pcntl` handler. The rest end the run with exit code 128 plus the signal number. | No signals |
 
 `DefaultEngineConfig` keeps a per-user cache directory: wazero's compiled code, and the PHP binaries decompressed.
-Each binary is compiled on its first run. `Engine.Compile` does it ahead, so that the first request does not wait.
 With the cache, `gophper php -r 'echo 1;'` takes about 0.18 seconds.
 Most of it is wazero validating the 16 MB binary, which it does even with the cache.
+
+> [!WARNING]
+> With an empty cache, the first run compiles PHP to machine code, which takes a while.
+> On an Apple Silicon Mac, php.wasm and php-cgi.wasm took 12 seconds together, and 0.3 seconds from the cache.
+> A small CI runner may take several times as long.
+>
+> | Call | What it compiles |
+> | --- | --- |
+> | The first `RunCLI` or `RunCGI` | php.wasm, or php-cgi.wasm |
+> | `Engine.Compile` | Both, ahead of the first run |
+> | `server.NewHTTPHandler`, `server.NewFastCGIServer` | php-cgi.wasm, before they return, so the first request does not wait |
+>
+> With `CacheDir` empty, as with `EngineConfig{}`, every new `Engine` compiles again.
 
 ## Usage: As a Tool
 
