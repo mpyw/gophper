@@ -33,7 +33,9 @@ func TestSystemHost(t *testing.T) {
 	}{
 		{"uid", `echo posix_getuid();`, fmt.Sprint(os.Getuid())},
 		{"user", `echo posix_getpwuid(posix_getuid()) !== false ? 'found' : 'missing';`, "found"},
-		{"hostname", `echo gethostname() === php_uname('n') && gethostname() !== '' ? 'same' : 'differ';`, "same"},
+		// wasi-libc's utsname holds 64 bytes of it, so php_uname() may cut a
+		// longer one short, as macOS CI runners' names are.
+		{"hostname", `echo gethostname() !== '' && substr(gethostname(), 0, 64) === php_uname('n') ? 'same' : 'differ';`, "same"},
 		{"fileperms", fmt.Sprintf(`printf('%%o', fileperms(%q) & 0777);`, file), "750"},
 		{"fileowner", fmt.Sprintf(`echo fileowner(%q);`, file), fmt.Sprint(os.Getuid())},
 		{"chmod", fmt.Sprintf(`chmod(%[1]q, 0640); clearstatcache(); printf('%%o', fileperms(%[1]q) & 0777);`, file), "640"},
@@ -205,20 +207,41 @@ func TestSystemLockCanceled(t *testing.T) {
 	if err := os.WriteFile(file, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	start := time.Now()
+	ctx, ready, canceled := systemCancelWhenReady(t)
 	out, _, err := runSystemPHP(ctx, t, fmt.Sprintf(`
 		$a = fopen(%[1]q, 'r'); $b = fopen(%[1]q, 'r');
-		flock($a, LOCK_EX); echo "locked\n";
-		flock($b, LOCK_EX); echo "not canceled\n";`, file), "")
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("err %v, want the deadline", err)
+		flock($a, LOCK_EX); echo "locked\n"; touch(%[2]q);
+		flock($b, LOCK_EX); echo "not canceled\n";`, file, ready), "")
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err %v, want the cancel", err)
 	}
-	if d := time.Since(start); d > 2*time.Second {
+	if d := time.Since(canceled()); d > 2*time.Second {
 		t.Errorf("the run took %v after the cancel", d)
 	}
 	if !strings.HasPrefix(out, "locked\n") {
 		t.Errorf("got %q", out)
 	}
+}
+
+// systemCancelWhenReady returns a context canceled 100ms after the script
+// creates the file at ready, and when it was canceled. A deadline would
+// count the time an instance takes to start, which a slow machine makes
+// longer than the deadline.
+func systemCancelWhenReady(t *testing.T) (ctx context.Context, ready string, canceled func() time.Time) {
+	t.Helper()
+	ready = filepath.Join(t.TempDir(), "ready")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	at := make(chan time.Time, 1)
+	go func() {
+		for deadline := time.Now().Add(time.Minute); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			if _, err := os.Stat(ready); err == nil {
+				time.Sleep(100 * time.Millisecond)
+				break
+			}
+		}
+		at <- time.Now()
+		cancel()
+	}()
+	return ctx, ready, func() time.Time { return <-at }
 }

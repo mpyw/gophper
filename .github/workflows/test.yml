@@ -18,7 +18,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        os: [ubuntu-24.04, macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     # id-token: write lets the Codecov upload authenticate as this run,
@@ -58,8 +58,11 @@ jobs:
           use_oidc: true
         continue-on-error: true
 
+      # Their results do not depend on the OS.
       - name: Lint
+        if: matrix.os == 'ubuntu-24.04'
         run: golangci-lint run ./...
 
       - name: declscope
+        if: matrix.os == 'ubuntu-24.04'
         run: declscope ./... && declscope shrink ./...

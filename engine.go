@@ -21,7 +21,9 @@ import (
 	"github.com/mpyw/gophper/internal/hostfn"
 	"github.com/mpyw/gophper/internal/hostnet"
 	"github.com/mpyw/gophper/internal/hostproc"
+	"github.com/mpyw/gophper/internal/hostsig"
 	"github.com/mpyw/gophper/internal/hostsys"
+	"github.com/mpyw/gophper/internal/hostvm"
 	"github.com/mpyw/gophper/internal/wasi"
 )
 
@@ -65,12 +67,21 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 	e.runtime = wazero.NewRuntimeWithConfig(ctx, rc)
 	e.dylink = dylink.NewCache(e.runtime)
 	if _, err := wasi_snapshot_preview1.Instantiate(ctx, e.runtime); err != nil {
-		e.Close(ctx)
-		return nil, err
+		return nil, errors.Join(err, e.Close(ctx))
 	}
 	host := e.runtime.NewHostModuleBuilder("gophper")
-	host.NewFunctionBuilder().WithFunc(engineSetTimeout).Export("set_timeout")
-	engineExportSignals(host)
+	hostvm.ExportVM(host, func(ctx context.Context) *hostvm.VM {
+		if inst := engineInstanceFrom(ctx); inst != nil {
+			return inst.vm
+		}
+		return nil
+	})
+	hostsig.ExportSignals(host, func(ctx context.Context) *hostsig.Signals {
+		if inst := engineInstanceFrom(ctx); inst != nil {
+			return inst.signals
+		}
+		return nil
+	})
 	hostnet.ExportSockets(host, func(ctx context.Context) *hostnet.Sockets {
 		if inst := engineInstanceFrom(ctx); inst != nil {
 			return inst.sockets
@@ -103,13 +114,12 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 	})
 	hostnet.ExportDNS(host, func(ctx context.Context) wasi.Run {
 		if inst := engineInstanceFrom(ctx); inst != nil {
-			return inst
+			return inst.vm
 		}
 		return nil
 	})
 	if _, err := host.Instantiate(ctx); err != nil {
-		e.Close(ctx)
-		return nil, err
+		return nil, errors.Join(err, e.Close(ctx))
 	}
 
 	// Compilation must outlive the ctx of the first run that triggers it.
@@ -235,7 +245,7 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 		WithArgs(append([]string{argv0}, opts.Args...)...).
 		WithSysWalltime().
 		WithSysNanotime().
-		WithNanosleep(inst.nanosleep).
+		WithNanosleep(inst.vm.Nanosleep).
 		WithRandSource(engineRandSource{}).
 		WithFSConfig(fs)
 	if opts.Stdin != nil {
@@ -257,25 +267,25 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 		}
 	}
 
-	// The instance allocates the linear memory, so that an interrupt can
-	// write to it while the module grows it.
-	m, err := e.runtime.InstantiateModule(experimental.WithMemoryAllocator(ctx, inst), mod, mc)
+	// The VM allocates the linear memory, so that an interrupt can write
+	// to it while the module grows it.
+	m, err := e.runtime.InstantiateModule(experimental.WithMemoryAllocator(ctx, inst.vm), mod, mc)
 	if err != nil {
 		return 0, err
 	}
 	defer m.Close(context.WithoutCancel(ctx))
-	if err := inst.locate(m); err != nil {
+	if err := inst.vm.Locate(m); err != nil {
 		return 0, err
 	}
-	defer inst.setTimeout(0)
+	defer inst.vm.SetTimeout(0)
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}
 	// Canceling stops the script the same way a timeout does.
 	done := make(chan struct{})
 	defer close(done)
-	defer context.AfterFunc(ctx, func() { inst.interruptUntil(done) })()
-	defer inst.setAlarm(0)
+	defer context.AfterFunc(ctx, func() { inst.vm.InterruptUntil(done) })()
+	defer inst.signals.SetAlarm(0)
 	if opts.Signals != nil {
 		go inst.forwardSignals(opts.Signals, done)
 	}
@@ -285,10 +295,7 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 	if exitErr := (*sys.ExitError)(nil); errors.As(err, &exitErr) {
 		code, err = int(exitErr.ExitCode()), nil
 	}
-	inst.signals.mu.Lock()
-	terminated := inst.signals.terminated
-	inst.signals.mu.Unlock()
-	if terminated != 0 {
+	if terminated := inst.signals.Terminated(); terminated != 0 {
 		// Ended by a signal's default action, as a shell reports it.
 		return 128 + int(terminated), nil
 	}

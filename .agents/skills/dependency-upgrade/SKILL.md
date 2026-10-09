@@ -24,7 +24,7 @@ description: Update or add a Go module or tool in gophper, such as wazero, urfav
 | Check | Why |
 | --- | --- |
 | `WithCoreFeatures` in `engine.go` | Exception handling and extended-const are experimental features. Their names can change. |
-| `experimental.WithMemoryAllocator` | `engineMemory` allocates the linear memory itself (wasm-host skill) |
+| `experimental.WithMemoryAllocator` | `hostvm` allocates the linear memory itself (wasm-host skill) |
 | wazero issue #2522 | `exnref` use-after-free, open on 2026-10-09. Check whether a release fixed it. |
 | A few tests under `-race` | wazero compiles under the race detector, so run some at a time: `go test -race -timeout 40m -run 'TestX' .` |
 | Performance | Run `testdata/bench.php` again (performance skill). The compiler shapes it. |

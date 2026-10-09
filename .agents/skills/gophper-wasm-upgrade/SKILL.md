@@ -40,8 +40,8 @@ gophper-wasm's ABI.md is the contract. Every host function is in the host module
 
 | Area | Exported by |
 | --- | --- |
-| Timer | `engine.go` (`set_timeout`) |
-| Signals | `signal.go` |
+| Timer | `internal/hostvm` (`ExportVM`) |
+| Signals | `internal/hostsig` (`ExportSignals`) |
 | Sockets, pipes, DNS | `internal/hostnet` (`ExportSockets`, `ExportDNS`) |
 | Processes | `internal/hostproc` (`ExportProcesses`) |
 | Users, locks, paths | `internal/hostsys` (`ExportSystem`) |

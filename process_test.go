@@ -205,17 +205,16 @@ func TestProcessWaitCanceled(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("needs /bin/sh")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
-	defer cancel()
-	start := time.Now()
-	out, _, err := runProcessPHP(ctx, t, `
+	ctx, ready, canceled := processCancelWhenReady(t)
+	out, _, err := runProcessPHP(ctx, t, fmt.Sprintf(`
 		$p = proc_open(['sleep', '3'], [], $pipes);
 		echo "waiting\n";
-		echo 'closed ', proc_close($p), "\n";`, nil, "")
-	if !errors.Is(err, context.DeadlineExceeded) {
-		t.Errorf("err %v, want the deadline", err)
+		touch(%q);
+		echo 'closed ', proc_close($p), "\n";`, ready), nil, "")
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("err %v, want the cancel", err)
 	}
-	if d := time.Since(start); d > 2*time.Second {
+	if d := time.Since(canceled()); d > 2*time.Second {
 		t.Errorf("the run took %v after the cancel", d)
 	}
 	// proc_close gives up once the run is over, rather than retrying. The
@@ -223,4 +222,27 @@ func TestProcessWaitCanceled(t *testing.T) {
 	if !strings.HasPrefix(out, "waiting\nclosed ") {
 		t.Errorf("got %q", out)
 	}
+}
+
+// processCancelWhenReady returns a context canceled 100ms after the script
+// creates the file at ready, and when it was canceled. A deadline would
+// count the time an instance takes to start, which a slow machine makes
+// longer than the deadline.
+func processCancelWhenReady(t *testing.T) (ctx context.Context, ready string, canceled func() time.Time) {
+	t.Helper()
+	ready = filepath.Join(t.TempDir(), "ready")
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	at := make(chan time.Time, 1)
+	go func() {
+		for deadline := time.Now().Add(time.Minute); time.Now().Before(deadline); time.Sleep(10 * time.Millisecond) {
+			if _, err := os.Stat(ready); err == nil {
+				time.Sleep(100 * time.Millisecond)
+				break
+			}
+		}
+		at <- time.Now()
+		cancel()
+	}()
+	return ctx, ready, func() time.Time { return <-at }
 }

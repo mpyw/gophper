@@ -62,6 +62,9 @@ func cliMain(m *testing.M) int {
 	}
 	defer os.RemoveAll(dir)
 	cliBinary = filepath.Join(dir, "gophper")
+	if runtime.GOOS == "windows" {
+		cliBinary += ".exe"
+	}
 	cliCacheDir = filepath.Join(dir, "cache")
 
 	args := []string{"build", "-o", cliBinary}

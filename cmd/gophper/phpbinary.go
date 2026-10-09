@@ -5,6 +5,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -57,12 +58,10 @@ func phpBinaryScript(cacheDir string, args []string) (string, error) {
 	}
 	defer os.Remove(tmp.Name())
 	if _, err := tmp.WriteString(script); err != nil {
-		tmp.Close()
-		return "", err
+		return "", errors.Join(err, tmp.Close())
 	}
 	if err := tmp.Chmod(0o755); err != nil {
-		tmp.Close()
-		return "", err
+		return "", errors.Join(err, tmp.Close())
 	}
 	if err := tmp.Close(); err != nil {
 		return "", err

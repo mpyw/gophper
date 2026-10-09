@@ -53,6 +53,8 @@ linters:
             - github.com/mpyw/gophper/internal/hostsys$
             - github.com/mpyw/gophper/internal/hostfn$
             - github.com/mpyw/gophper/internal/wasi$
+            - github.com/mpyw/gophper/internal/hostsig$
+            - github.com/mpyw/gophper/internal/hostvm$
 
         # Package server: HTTP and FastCGI on top of the Engine's public API.
         server:
@@ -97,6 +99,25 @@ linters:
             - "**/internal/wasi/*.go"
           allow:
             - $gostd
+
+        # The VM of one instance: linear memory, interrupts and the timer.
+        hostvm:
+          list-mode: strict
+          files:
+            - "**/internal/hostvm/*.go"
+          allow:
+            - $gostd
+            - github.com/tetratelabs/wazero
+
+        # Signals for the guest.
+        hostsig:
+          list-mode: strict
+          files:
+            - "**/internal/hostsig/*.go"
+          allow:
+            - $gostd
+            - github.com/tetratelabs/wazero
+            - github.com/mpyw/gophper/internal/wasi$
 
         # Sockets and DNS for the guest: the standard library and wazero only.
         hostnet:

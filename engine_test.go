@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -97,23 +98,25 @@ func TestExitCode(t *testing.T) {
 }
 
 func TestTimeout(t *testing.T) {
-	const loop = `register_shutdown_function(fn () => print("shutdown\n")); for (;;) {}`
+	// Timed from inside PHP: starting an instance takes time of its own, and
+	// more on a slow machine.
+	const loop = `$t = hrtime(true); register_shutdown_function(function () use ($t) { printf("shutdown after %d ms\n", (hrtime(true) - $t) / 1e6); }); for (;;) {}`
 	for name, args := range map[string][]string{
 		"max_execution_time": {"-d", "max_execution_time=1", "-r", loop},
 		"set_time_limit":     {"-r", "set_time_limit(1); " + loop},
 	} {
 		t.Run(name, func(t *testing.T) {
 			var out bytes.Buffer
-			start := time.Now()
 			code, err := newTestEngine(t).RunCLI(context.Background(), gophper.Options{Args: args, Stdout: &out, Stderr: &out})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if d := time.Since(start); d < time.Second || d > 2500*time.Millisecond {
-				t.Errorf("took %s, want about 1s", d)
+			m := regexp.MustCompile(`shutdown after (\d+) ms\n$`).FindStringSubmatch(out.String())
+			if code != 255 || !strings.Contains(out.String(), "Maximum execution time of 1 second exceeded") || m == nil {
+				t.Fatalf("exit code %d\n%s", code, out.String())
 			}
-			if code != 255 || !strings.Contains(out.String(), "Maximum execution time of 1 second exceeded") || !strings.HasSuffix(out.String(), "shutdown\n") {
-				t.Errorf("exit code %d\n%s", code, out.String())
+			if ms, _ := strconv.Atoi(m[1]); ms < 950 || ms > 2000 {
+				t.Errorf("stopped after %d ms, want about 1000", ms)
 			}
 		})
 	}

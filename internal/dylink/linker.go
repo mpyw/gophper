@@ -16,6 +16,7 @@ package dylink
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"maps"
 	"slices"
@@ -231,12 +232,15 @@ func (l *Linker) Sym(ctx context.Context, main api.Module, handle int32, name st
 	return 0, fmt.Errorf("undefined symbol: %s", name)
 }
 
-// Close closes every module linked into the instance.
-func (l *Linker) Close(ctx context.Context) {
+// Close closes every module linked into the instance, and returns their
+// errors joined.
+func (l *Linker) Close(ctx context.Context) error {
+	var err error
 	for _, m := range slices.Backward(l.modules) {
-		m.Close(ctx)
+		err = errors.Join(err, m.Close(ctx))
 	}
 	l.modules = nil
+	return err
 }
 
 // linkerSlotPrefix names the global holding a trampoline's table slot.
