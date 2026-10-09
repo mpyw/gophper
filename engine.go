@@ -29,7 +29,7 @@ import (
 )
 
 // engineABIVersion is the phpwasm.ABIVersion this host implements.
-const engineABIVersion = 1
+const engineABIVersion = 2
 
 // Engine compiles the PHP binaries once and runs them many times.
 // It is safe for concurrent use. Each run gets a fresh PHP instance.

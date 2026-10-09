@@ -185,18 +185,24 @@ func TestHTTPS(t *testing.T) {
 // flush() in PHP reaches the client before the script ends.
 func TestHTTPStreaming(t *testing.T) {
 	srv := startHTTP(t)
-	start := time.Now()
 	res, err := http.Get(srv.URL + "/stream.php")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = res.Body.Close() }()
-	line, err := bufio.NewReader(res.Body).ReadString('\n')
+	br := bufio.NewReader(res.Body)
+	line, err := br.ReadString('\n')
 	if err != nil || line != "first\n" {
 		t.Fatalf("%q %v", line, err)
 	}
-	if d := time.Since(start); d > 400*time.Millisecond {
-		t.Errorf("first line took %s; output was buffered", d)
+	// stream.php sleeps 500ms between the lines. Buffered, they would come
+	// together. Timed from the first line, so a slow start does not count.
+	first := time.Now()
+	if line, err := br.ReadString('\n'); err != nil || line != "second\n" {
+		t.Fatalf("%q %v", line, err)
+	}
+	if d := time.Since(first); d < 300*time.Millisecond {
+		t.Errorf("second line came %s after the first; output was buffered", d)
 	}
 }
 

@@ -1,2 +1,6 @@
+# Line endings stay LF on every checkout, Windows too: tests compare the
+# bytes of files in testdata with what PHP and the server send.
+* text=auto eol=lf
+
 # Written by go generate ./cmd/gophper. Committed, since go install does not run it.
 cmd/gophper/modlicenses.txt linguist-generated

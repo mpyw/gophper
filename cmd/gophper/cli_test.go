@@ -362,7 +362,8 @@ echo json_encode([
 	if code, body := cliGet(t, http.DefaultClient, "http://"+s.addr+"/static.txt"); code != 200 || body != "static" {
 		t.Errorf("static: %d %q", code, body)
 	}
-	if code := s.stop(t); code != 0 {
+	// Windows has no SIGTERM: stop kills the process there.
+	if code := s.stop(t); code != 0 && runtime.GOOS != "windows" {
 		t.Errorf("exit %d after SIGTERM\n%s", code, s.logs)
 	}
 	if b, _ := os.ReadFile(log); !strings.Contains(string(b), "GET /static.txt") {

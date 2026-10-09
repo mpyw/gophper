@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -383,4 +384,27 @@ type engineFirstWrite struct {
 func (w *engineFirstWrite) Write(p []byte) (int, error) {
 	w.once.Do(w.f)
 	return len(p), nil
+}
+
+// TestTimeoutOnOneProcessor runs a loop that calls nothing, on one P.
+// Go never preempts wazero's machine code, and the timer of
+// max_execution_time sits on the P that armed it: the loop's. Without the
+// guest yielding now and then, that timer never ran, and the loop never
+// ended. More Ps only made it rare.
+func TestTimeoutOnOneProcessor(t *testing.T) {
+	engine := newTestEngine(t)
+	// Compiled first, with every P: compiling on one takes long.
+	if code, err := engine.RunCLI(context.Background(), gophper.Options{Args: []string{"-r", "echo 1;"}}); err != nil || code != 0 {
+		t.Fatal(code, err)
+	}
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(1))
+	var out bytes.Buffer
+	code, err := engine.RunCLI(context.Background(), gophper.Options{
+		Args:   []string{"-d", "max_execution_time=1", "-r", `for (;;) {}`},
+		Stdout: &out,
+		Stderr: &out,
+	})
+	if err != nil || code != 255 || !strings.Contains(out.String(), "Maximum execution time of 1 second exceeded") {
+		t.Errorf("exit %d, err %v\n%s", code, err, out.String())
+	}
 }

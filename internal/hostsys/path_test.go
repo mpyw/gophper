@@ -207,11 +207,15 @@ func (systemFileInfo) IsDir() bool        { return false }
 func (systemFileInfo) Sys() any           { return nil }
 
 func TestSystemOwner(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Every file is the current user's, as userCurrentIDs reports it.
+		if uid, gid := systemOwner(systemFileInfo{}); uid != 1000 || gid != 1000 {
+			t.Errorf("%d, %d, want 1000, 1000", uid, gid)
+		}
+		return
+	}
 	if uid, gid := systemOwner(systemFileInfo{}); uid != 0 || gid != 0 {
 		t.Errorf("no system data: %d, %d, want 0, 0", uid, gid)
-	}
-	if runtime.GOOS == "windows" {
-		return
 	}
 	st, err := os.Stat(t.TempDir())
 	if err != nil {

@@ -19,6 +19,7 @@ package hostvm
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"sync"
 	"time"
 
@@ -52,9 +53,14 @@ func NewVM(ctx context.Context, cancel context.CancelFunc) *VM {
 	return &VM{ctx: ctx, cancel: cancel, interrupted: make(chan struct{})}
 }
 
-// ExportVM adds set_timeout to b. from returns the VM a call comes from, or
-// nil.
+// ExportVM adds set_timeout and yield to b. from returns the VM a call
+// comes from, or nil.
 func ExportVM(b wazero.HostModuleBuilder, from func(context.Context) *VM) {
+	// Go never preempts wazero's machine code, so a loop that calls nothing
+	// else would hold off the stop-the-world GC, and every other goroutine
+	// with it. The guest calls yield every so often (gophper-wasm's
+	// patches/0014), so that the scheduler can stop this goroutine.
+	b.NewFunctionBuilder().WithFunc(func(context.Context) { runtime.Gosched() }).Export("yield")
 	b.NewFunctionBuilder().WithFunc(func(ctx context.Context, seconds int32) {
 		if v := from(ctx); v != nil {
 			v.SetTimeout(seconds)

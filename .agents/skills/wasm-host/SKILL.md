@@ -33,6 +33,7 @@ The root package is the public API and the wiring. Everything else is in `intern
 
 | Idea | Why not |
 | --- | --- |
+| Counting on Go to preempt an instance's goroutine | Go never preempts wazero's machine code. A busy PHP loop kept its P, so the timer it armed never ran there, and CI hung on `for (;;) {}`. The guest calls `yield` (gophper-wasm's `patches/0014`), which runs `runtime.Gosched`. `TestTimeoutOnOneProcessor` pins GOMAXPROCS to 1, where no other P can steal the timer. |
 | `WithCloseOnContextDone(true)` for timeouts | Its checks made PHP 3.8 times slower (bench.php: 650 ms to 2.5 s). php-src's timer goes to Go, which sets `EG(vm_interrupt)`. |
 | Writing the interrupt flags through `api.Memory` from the timer goroutine | Races with `memory.grow`, which replaces the buffer, so a flag could be lost. `hostvm`'s memory allocates the linear memory and serializes both. |
 | A Go-side `--timeout` separate from `max_execution_time` | It disagreed with `ini_get()` and ignored `set_time_limit()`. |
