@@ -7,24 +7,31 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 )
 
-// phpBinaryScript writes a script that runs "gophper php" with the same
+// phpBinaryArgsFile holds the global options of a php.exe that
+// phpBinaryScript made, one per line, next to it.
+const phpBinaryArgsFile = "gophper.args"
+
+// phpBinaryScript makes a program that runs "gophper php" with the same
 // global options, and returns its path for EngineConfig.PHPBinary. PHP_BINARY
 // then names it, so that Composer, Laravel and others that start PHP again
-// start gophper. It returns "" where there is no /bin/sh.
+// start gophper.
 //
-// A script, not a symlink to gophper: PHP resolves PHP_BINARY with
-// realpath, which would drop the name "php" that selects the subcommand.
+// On Unix it is a shell script. A symlink to gophper would not do: PHP
+// resolves PHP_BINARY with realpath, which would drop the name "php" that
+// selects the subcommand. On Windows it is gophper itself, as php.exe, with
+// the options in phpBinaryArgsFile. A .cmd script would do on its own, but
+// Windows passes a batch file's arguments through cmd.exe, which reads &
+// and | in them.
 func phpBinaryScript(cacheDir string, args []string) (string, error) {
-	if runtime.GOOS == "windows" {
-		return "", nil
-	}
 	exe, err := os.Executable()
 	if err != nil {
 		return "", err
@@ -32,57 +39,156 @@ func phpBinaryScript(cacheDir string, args []string) (string, error) {
 	if exe, err = filepath.EvalSymlinks(exe); err != nil {
 		return "", err
 	}
+	base, err := phpBinaryBase(cacheDir)
+	if err != nil {
+		return "", err
+	}
+	if runtime.GOOS == "windows" {
+		return phpBinaryExe(base, exe, args)
+	}
 	quoted := []string{phpBinaryQuote(exe)}
 	for _, a := range args {
 		quoted = append(quoted, phpBinaryQuote(a))
 	}
 	script := fmt.Sprintf("#!/bin/sh\nexec %s php \"$@\"\n", strings.Join(quoted, " "))
-
-	base := cacheDir
-	if base == "" {
-		base = filepath.Join(os.TempDir(), fmt.Sprintf("gophper-%d", os.Getuid()))
-		// Anyone can create this name first, and then replace the script
-		// between our write and PHP's exec. So only a private directory of
-		// our own will do.
-		if err := os.Mkdir(base, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
-			return "", err
-		}
-		fi, err := os.Lstat(base)
-		if err != nil {
-			return "", err
-		}
-		if !fi.IsDir() || fi.Mode().Perm()&0o077 != 0 || !phpBinaryOwned(fi) {
-			return "", fmt.Errorf("%s: not a private directory of this user", base)
-		}
-	}
 	sum := sha256.Sum256([]byte(script))
-	dir := filepath.Join(base, "bin", hex.EncodeToString(sum[:8]))
-	path := filepath.Join(dir, "php")
+	path := filepath.Join(base, "bin", hex.EncodeToString(sum[:8]), "php")
 	if b, err := os.ReadFile(path); err == nil && string(b) == script {
 		return path, nil
 	}
-	if err := os.MkdirAll(dir, 0o755); err != nil {
+	return path, phpBinaryWrite(path, 0o755, func(w io.Writer) error {
+		_, err := io.WriteString(w, script)
+		return err
+	})
+}
+
+// phpBinaryBase is the cache directory, or one in the temporary directory.
+func phpBinaryBase(cacheDir string) (string, error) {
+	if cacheDir != "" {
+		return cacheDir, nil
+	}
+	if runtime.GOOS == "windows" {
+		// The temporary directory is the user's own, in the profile.
+		return filepath.Join(os.TempDir(), "gophper"), nil
+	}
+	base := filepath.Join(os.TempDir(), fmt.Sprintf("gophper-%d", os.Getuid()))
+	// Anyone can create this name first, and then replace the script
+	// between our write and PHP's exec. So only a private directory of
+	// our own will do.
+	if err := os.Mkdir(base, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
 		return "", err
 	}
-	// Written to a temporary name first, so that a concurrent run never
-	// executes half a script.
-	tmp, err := os.CreateTemp(dir, ".php-*")
+	fi, err := os.Lstat(base)
 	if err != nil {
 		return "", err
+	}
+	if !fi.IsDir() || fi.Mode().Perm()&0o077 != 0 || !phpBinaryOwned(fi) {
+		return "", fmt.Errorf("%s: not a private directory of this user", base)
+	}
+	return base, nil
+}
+
+// phpBinaryExe links or copies exe to php.exe, in a directory of its own
+// for each build of gophper and each set of options.
+func phpBinaryExe(base, exe string, args []string) (string, error) {
+	fi, err := os.Stat(exe)
+	if err != nil {
+		return "", err
+	}
+	// A rebuilt gophper at the same path gets a new copy.
+	key := strings.Join(append([]string{exe, strconv.FormatInt(fi.Size(), 10), strconv.FormatInt(fi.ModTime().UnixNano(), 10)}, args...), "\x00")
+	sum := sha256.Sum256([]byte(key))
+	dir := filepath.Join(base, "bin", hex.EncodeToString(sum[:8]))
+	path := filepath.Join(dir, "php.exe")
+	if _, err := os.Stat(path); err == nil {
+		return path, nil
+	}
+	// The options first: a php.exe that exists has them.
+	if err := phpBinaryWrite(filepath.Join(dir, phpBinaryArgsFile), 0o644, func(w io.Writer) error {
+		for _, a := range args {
+			if _, err := io.WriteString(w, a+"\n"); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return "", err
+	}
+	tmp := filepath.Join(dir, ".php-"+strconv.Itoa(os.Getpid())+".exe")
+	if err := os.Link(exe, tmp); err != nil {
+		// Another volume: a copy.
+		if err := phpBinaryCopy(exe, tmp); err != nil {
+			return "", err
+		}
+	}
+	if err := os.Rename(tmp, path); err != nil {
+		// Gone after a successful rename; otherwise only a stray file.
+		_ = os.Remove(tmp)
+		// Another run made it first, and it may be running already.
+		if _, serr := os.Stat(path); serr == nil {
+			return path, nil
+		}
+		return "", err
+	}
+	return path, nil
+}
+
+func phpBinaryCopy(src, dst string) error {
+	in, err := os.Open(src)
+	if err != nil {
+		return err
+	}
+	// Opened read-only, so closing it loses nothing.
+	defer func() { _ = in.Close() }()
+	return phpBinaryWrite(dst, 0o755, func(w io.Writer) error {
+		_, err := io.Copy(w, in)
+		return err
+	})
+}
+
+// phpBinaryWrite writes a file under a temporary name, then renames it, so
+// that a concurrent run never sees half of it.
+func phpBinaryWrite(path string, mode fs.FileMode, write func(io.Writer) error) error {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".php-*")
+	if err != nil {
+		return err
 	}
 	// After the rename the name is gone, and a failed removal leaves only
 	// a stray temporary file.
 	defer func() { _ = os.Remove(tmp.Name()) }()
-	if _, err := tmp.WriteString(script); err != nil {
-		return "", errors.Join(err, tmp.Close())
+	if err := write(tmp); err != nil {
+		return errors.Join(err, tmp.Close())
 	}
-	if err := tmp.Chmod(0o755); err != nil {
-		return "", errors.Join(err, tmp.Close())
+	if err := tmp.Chmod(mode); err != nil {
+		return errors.Join(err, tmp.Close())
 	}
 	if err := tmp.Close(); err != nil {
-		return "", err
+		return err
 	}
-	return path, os.Rename(tmp.Name(), path)
+	return os.Rename(tmp.Name(), path)
+}
+
+// phpBinaryArgs returns the global options of the php.exe that is running,
+// from phpBinaryArgsFile next to it, or none.
+func phpBinaryArgs() []string {
+	exe, err := os.Executable()
+	if err != nil {
+		return nil
+	}
+	b, err := os.ReadFile(filepath.Join(filepath.Dir(exe), phpBinaryArgsFile))
+	if err != nil {
+		return nil
+	}
+	var args []string
+	for line := range strings.SplitSeq(string(b), "\n") {
+		if line = strings.TrimSuffix(line, "\r"); line != "" {
+			args = append(args, line)
+		}
+	}
+	return args
 }
 
 // phpBinaryQuote quotes s for /bin/sh.

@@ -282,12 +282,17 @@ func TestCLIPHPName(t *testing.T) {
 
 // TestCLIPHPBinary starts PHP again through PHP_BINARY, as Composer does.
 func TestCLIPHPBinary(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("PHP_BINARY is a shell script")
+	// Without a shell, as Composer starts it: the global options must come
+	// along, or the child would not find the extension.
+	ext := t.TempDir()
+	if _, errOut, code := cliRun(t, t.TempDir(), "", "--extension-dir", ext, "extension", "install", "dl_test"); code != 0 {
+		t.Fatalf("install: exit %d: %s", code, errOut)
 	}
-	out, errOut, code := cliRun(t, t.TempDir(), "", "php", "-r",
-		`echo shell_exec(escapeshellarg(PHP_BINARY) . " -r 'echo 6 * 7;'");`)
-	if code != 0 || out != "42" {
+	out, errOut, code := cliRun(t, t.TempDir(), "", "--extension-dir", ext, "php", "-r", `
+		$p = proc_open([PHP_BINARY, "-d", "extension=dl_test", "-r", 'echo 6 * 7, " ", extension_loaded("dl_test") ? "loaded" : "missing";'], [1 => ["pipe", "w"]], $pipes);
+		echo stream_get_contents($pipes[1]);
+		exit(proc_close($p));`)
+	if code != 0 || out != "42 loaded" {
 		t.Errorf("exit %d: %q %s", code, out, errOut)
 	}
 }
@@ -437,8 +442,8 @@ func TestCLINoCache(t *testing.T) {
 	if err := cmd.Run(); err != nil {
 		t.Fatalf("%v: %s", err, errOut.String())
 	}
-	// PHP still runs. PHP_BINARY is then what PHP finds itself.
-	if !strings.HasPrefix(out.String(), "string(") || !strings.Contains(errOut.String(), "not a private directory") {
+	// PHP still runs, with PHP_BINARY empty: not a php that PATH has.
+	if out.String() != "string(0) \"\"\n" || !strings.Contains(errOut.String(), "not a private directory") {
 		t.Errorf("stdout %q, stderr %q", out.String(), errOut.String())
 	}
 }

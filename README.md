@@ -321,7 +321,7 @@ These come with gophper:
 | `sqlite3`, `mysqli`, `zlib` | Works |
 | Fibers | Throws `Fibers are not supported on this platform`. |
 | `proc_open`, `exec`, `shell_exec`, `system`, `passthru`, `popen` | Works. Children are host processes, started with Go's `os/exec`. Pipes, `socket` descriptors, files, the environment and the working directory are passed. |
-| `PHP_BINARY` | Runs `gophper php` again, with the same global options. Composer and `artisan` start PHP this way. |
+| `PHP_BINARY` | Runs `gophper php` again, with the same global options. Composer and `artisan` start PHP this way. A library user who sets no `EngineConfig.PHPBinary` gets it empty, never another PHP from `PATH`. |
 | `posix_*`, users and groups | Works. They are the host's: the uid gophper runs as, and its user database. |
 | `flock`, `chmod`, `chown`, `fileperms`, `fileowner`, `is_executable` | Works, on the host file. WASI itself has no permissions or locks. |
 | `dns_get_record`, `checkdnsrr`, `getmxrr` | Works. The host queries the name servers in `/etc/resolv.conf`. |
@@ -347,7 +347,7 @@ gophper runs on Windows too. These differ from Unix:
 | Paths | PHP sees each drive at `/c`, `/d` and so on. `C:\app\index.php` is `/c/app/index.php`. `gophper php` converts absolute path arguments. In Go, convert with `gophper.HostToGuest`. |
 | Temporary files | `gophper php` sets `TMPDIR` to the host's temporary directory, if unset. |
 | `proc_open` and the like | Commands run with `sh` from `PATH`, as Git for Windows provides. Without one, they run with `cmd.exe /s /c`. |
-| `PHP_BINARY` | Empty. It needs `/bin/sh`. |
+| `PHP_BINARY` | A `php.exe` that runs `gophper php`. It is gophper itself, linked or copied into the cache directory, with the global options in a file beside it. |
 | Users and groups | The uid and gid are 1000. Every file is owned by them. |
 | `stream_socket_pair` | Two loopback TCP sockets, as Windows has no `socketpair`. |
 | `flock` | Converting a lock between shared and exclusive unlocks it first. Another process can take it in between. |

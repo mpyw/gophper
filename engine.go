@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -228,6 +229,11 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 		dir := filepath.Dir(e.phpBinary)
 		fs = fs.WithReadOnlyDirMount(dir, hostpath.Guest(dir))
 		argv0 = hostpath.Guest(e.phpBinary)
+	} else {
+		// A bare name sends PHP looking in PATH, where it found the host's
+		// own php: Composer would then run another PHP. A path to nothing
+		// leaves PHP_BINARY empty.
+		argv0 = path.Join(hostnet.SocketPlaceholderDir, argv0)
 	}
 
 	mc := wazero.NewModuleConfig().

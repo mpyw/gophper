@@ -293,8 +293,19 @@ func TestEnginePHPBinary(t *testing.T) {
 	if want := gophper.HostToGuest(bin) + "|visible"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
-	if got := runEngineCLI(t, newTestEngine(t), `var_dump(PHP_BINARY);`); got != "string(0) \"\"\n" {
-		t.Errorf("without PHPBinary: %q", got)
+	// Without PHPBinary, it stays empty, even with a php in PATH: that one
+	// would be another PHP.
+	var out bytes.Buffer
+	_, err := newTestEngine(t).RunCLI(context.Background(), gophper.Options{
+		Args:     []string{"-r", `var_dump(PHP_BINARY);`},
+		Env:      []string{"PATH=" + gophper.HostToGuest(dir)},
+		FS:       gophper.HostFS(),
+		HostPath: gophper.HostPaths,
+		Stdout:   &out,
+		Stderr:   &out,
+	})
+	if err != nil || out.String() != "string(0) \"\"\n" {
+		t.Errorf("without PHPBinary: %q, %v", out.String(), err)
 	}
 }
 

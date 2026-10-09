@@ -38,7 +38,9 @@ import (
 func main() {
 	args := os.Args
 	if strings.TrimSuffix(filepath.Base(args[0]), ".exe") == "php" {
-		args = append([]string{args[0], "php"}, args[1:]...)
+		// The global options of a php.exe that phpBinaryScript made.
+		global := append([]string{args[0]}, phpBinaryArgs()...)
+		args = append(append(global, "php"), args[1:]...)
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)

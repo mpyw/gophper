@@ -74,3 +74,44 @@ func TestPHPBinaryScriptErrors(t *testing.T) {
 		t.Error("a missing temporary directory was accepted")
 	}
 }
+
+// TestPHPBinaryExe makes gophper's php.exe with its options, once for each
+// build and set of options. It runs on every OS, though only Windows uses it.
+func TestPHPBinaryExe(t *testing.T) {
+	base := t.TempDir()
+	exe := filepath.Join(t.TempDir(), "gophper.exe")
+	if err := os.WriteFile(exe, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--cache-dir", `C:\cache`}
+	path, err := phpBinaryExe(base, exe, args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(path); err != nil || string(b) != "binary" || filepath.Base(path) != "php.exe" {
+		t.Errorf("%s: %q, %v", path, b, err)
+	}
+	if b, err := os.ReadFile(filepath.Join(filepath.Dir(path), phpBinaryArgsFile)); err != nil || string(b) != "--cache-dir\nC:\\cache\n" {
+		t.Errorf("options %q, %v", b, err)
+	}
+	if again, err := phpBinaryExe(base, exe, args); err != nil || again != path {
+		t.Errorf("again: %s, %v", again, err)
+	}
+	if other, err := phpBinaryExe(base, exe, nil); err != nil || other == path {
+		t.Errorf("other options: %s, %v", other, err)
+	}
+	// Another volume: copied, not linked.
+	copied := filepath.Join(t.TempDir(), "copy")
+	if err := phpBinaryCopy(exe, copied); err != nil {
+		t.Fatal(err)
+	}
+	if b, err := os.ReadFile(copied); err != nil || string(b) != "binary" {
+		t.Errorf("copy %q, %v", b, err)
+	}
+	if _, err := phpBinaryExe(base, filepath.Join(t.TempDir(), "missing"), nil); err == nil {
+		t.Error("a missing gophper was accepted")
+	}
+	if err := phpBinaryCopy(filepath.Join(t.TempDir(), "missing"), copied); err == nil {
+		t.Error("copied a missing file")
+	}
+}
