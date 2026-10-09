@@ -81,7 +81,12 @@ func TestPHPBinaryScriptErrors(t *testing.T) {
 		t.Error("a file as the cache directory was accepted")
 	}
 	if runtime.GOOS == "windows" {
-		return // Windows makes the temporary directory's gophper as it goes.
+		// No local application data to put it in.
+		t.Setenv("LOCALAPPDATA", "")
+		if _, err := phpBinaryScript("", nil); err == nil {
+			t.Error("no local application data was accepted")
+		}
+		return
 	}
 	// No temporary directory.
 	t.Setenv("TMPDIR", filepath.Join(file, "tmp"))
