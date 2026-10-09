@@ -62,6 +62,7 @@ linters:
             - github.com/mpyw/gophper-wasm$
             - github.com/mpyw/gophper/internal/dylink$
             - github.com/mpyw/gophper/internal/hostnet$
+            - github.com/mpyw/gophper/internal/hostproc$
 
         # Package server: HTTP and FastCGI on top of the Engine's public API.
         server:
@@ -90,6 +91,7 @@ linters:
             - github.com/mpyw/gophper$
             - github.com/mpyw/gophper/caddy$
             - github.com/mpyw/gophper/server$
+            - github.com/mpyw/gophper-wasm/ext$
 
         # The Caddy module: gophper's public API inside Caddy.
         caddy:
@@ -123,6 +125,16 @@ linters:
           allow:
             - $gostd
             - github.com/tetratelabs/wazero
+
+        # Child processes for the guest. Pipes and sockets come from hostnet.
+        hostproc:
+          list-mode: strict
+          files:
+            - "**/internal/hostproc/*.go"
+          allow:
+            - $gostd
+            - github.com/tetratelabs/wazero
+            - github.com/mpyw/gophper/internal/hostnet$
 
         dylink:
           list-mode: strict

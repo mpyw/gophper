@@ -19,10 +19,11 @@ import (
 
 	"github.com/mpyw/gophper/internal/dylink"
 	"github.com/mpyw/gophper/internal/hostnet"
+	"github.com/mpyw/gophper/internal/hostproc"
 )
 
 // engineABIVersion is the phpwasm.ABIVersion this host implements.
-const engineABIVersion = 3
+const engineABIVersion = 4
 
 // Engine compiles the PHP binaries once and runs them many times.
 // It is safe for concurrent use. Each run gets a fresh PHP instance.
@@ -32,6 +33,7 @@ type Engine struct {
 	// dylink compiles extensions once for every instance.
 	dylink       *dylink.Cache
 	extensionDir string
+	phpBinary    string
 	// Each binary is compiled on first use, so a CLI run does not pay for php-cgi.
 	cliModule func() (wazero.CompiledModule, error)
 	cgiModule func() (wazero.CompiledModule, error)
@@ -48,7 +50,7 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 	rc := wazero.NewRuntimeConfig().
 		// Extended constant expressions place a side module's data at __memory_base.
 		WithCoreFeatures(api.CoreFeaturesV2 | experimental.CoreFeaturesExceptionHandling | experimental.CoreFeaturesExtendedConst)
-	e := &Engine{extensionDir: cfg.ExtensionDir}
+	e := &Engine{extensionDir: cfg.ExtensionDir, phpBinary: cfg.PHPBinary}
 	if cfg.CacheDir != "" {
 		cache, err := wazero.NewCompilationCacheWithDir(cfg.CacheDir)
 		if err != nil {
@@ -74,6 +76,12 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 	dylink.Export(host, func(ctx context.Context) *dylink.Linker {
 		if inst := engineInstanceFrom(ctx); inst != nil {
 			return inst.linker
+		}
+		return nil
+	})
+	hostproc.ExportProcesses(host, func(ctx context.Context) *hostproc.Processes {
+		if inst := engineInstanceFrom(ctx); inst != nil {
+			return inst.processes
 		}
 		return nil
 	})
@@ -137,8 +145,9 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 	if err != nil {
 		return 0, err
 	}
-	inst := newEngineInstance(ctx, e.dylink)
+	inst := newEngineInstance(ctx, e.dylink, opts)
 	defer inst.sockets.Close()
+	defer inst.processes.Close()
 	defer inst.linker.Close(context.WithoutCancel(ctx))
 
 	fs := opts.FS
@@ -150,6 +159,12 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 		WithFSMount(phpwasm.SSL, "/etc/gophper/ssl")
 	if e.extensionDir != "" {
 		fs = fs.WithReadOnlyDirMount(e.extensionDir, engineExtensionDir)
+	}
+	if e.phpBinary != "" {
+		// PHP_BINARY is checked from inside, so its directory must be visible.
+		dir := filepath.Dir(e.phpBinary)
+		fs = fs.WithReadOnlyDirMount(dir, filepath.ToSlash(dir))
+		argv0 = e.phpBinary
 	}
 
 	mc := wazero.NewModuleConfig().
@@ -213,7 +228,7 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 }
 
 // engineExtensionDir is php.wasm's extension_dir (gophper-wasm's ABI.md).
-const engineExtensionDir = "/gophper/extensions"
+const engineExtensionDir = "/usr/local/lib/php/extensions"
 
 // EngineConfig configures an Engine.
 type EngineConfig struct {
@@ -222,6 +237,11 @@ type EngineConfig struct {
 	// ExtensionDir holds extensions built by gophper-wasm's scripts/build-ext.sh.
 	// PHP loads them with extension=<name> or dl(). Empty means none.
 	ExtensionDir string
+	// PHPBinary is a host program that runs PHP, such as a script that
+	// runs "gophper php". PHP_BINARY reports it, so that a script starting
+	// PHP again, as Composer and Laravel do, runs it. Empty leaves
+	// PHP_BINARY empty.
+	PHPBinary string
 }
 
 // DefaultEngineConfig caches compiled code in a per-user directory.

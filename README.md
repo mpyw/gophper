@@ -26,6 +26,7 @@ The PHP binaries come from [gophper-wasm](https://github.com/mpyw/gophper-wasm),
 | `gophper serve [options]` | Serves a PHP app over HTTP or HTTPS, with no web server in front |
 | `gophper fcgi [options]` | A FastCGI server, like php-fpm |
 | `gophper caddy [caddy arguments]` | Caddy with gophper built in. Automatic HTTPS. |
+| `gophper extension list` / `install NAME...` | Lists or installs the extensions that come with gophper. See [Extensions](#extensions). |
 
 > [!TIP]
 > A symlink named `php` that points to `gophper` behaves like `gophper php`.
@@ -189,15 +190,24 @@ To build your own Caddy, import `github.com/mpyw/gophper/caddy`. It registers th
 ### Extensions
 
 Extensions load at runtime, as `.so` files do in native PHP.
-Each one is a WebAssembly module built by gophper-wasm, so one file runs on every platform.
+Each one is a WebAssembly module, so one file runs on every platform.
+
+gophper comes with some extensions. `gophper extension install` writes them to the extension directory:
 
 ```sh
+gophper --extension-dir ./extensions extension install dl_test
 gophper --extension-dir ./extensions php -d extension=dl_test -r 'echo dl_test_test2("ext"), "\n";'
 ```
 
 ```
+extensions/dl_test.so
 Hello ext
 ```
+
+| Command | What it does |
+| --- | --- |
+| `gophper extension list` | Lists the extensions that come with gophper |
+| `gophper --extension-dir DIR extension install NAME...` | Writes them to `DIR` as `NAME.so` |
 
 | Way to set the directory | Example |
 | --- | --- |
@@ -207,8 +217,15 @@ Hello ext
 
 `extension=<name>` in php.ini, `-d extension=<name>`, and `dl("<name>.so")` all work.
 
+Your own extensions go in the same directory.
+
+> [!IMPORTANT]
+> An extension must be a wasm side module, built with gophper-wasm's `scripts/build-ext.sh`.
+> A native `.so` does not load.
+> Build it against the same php-src version and configuration as gophper's PHP.
+
 > [!NOTE]
-> Only `dl_test`, php-src's test extension, is published so far.
+> Only `dl_test`, php-src's test extension, comes with gophper so far.
 
 ### From Go
 
@@ -250,7 +267,9 @@ With the cache, `gophper php -r 'echo 1;'` takes about 0.07 seconds.
 | PDO with `pdo_mysql`, `pdo_pgsql` and `pdo_sqlite` | Works. Tested over TCP, Unix sockets and TLS, with MySQL's `caching_sha2_password` and PostgreSQL's SCRAM. |
 | `sqlite3`, `mysqli`, `zlib` | Works |
 | Fibers | Throws `Fibers are not supported on this platform`. |
-| `proc_open`, `exec`, `posix_*` | Not yet |
+| `proc_open`, `exec`, `shell_exec`, `system`, `passthru`, `popen` | Works. Children are host processes, started with Go's `os/exec`. Pipes, `socket` descriptors, files, the environment and the working directory are passed. |
+| `PHP_BINARY` | Runs `gophper php` again, with the same global options. Composer and `artisan` start PHP this way. |
+| `posix_*` | Partly. Everything runs as uid 0, and there is no user database. |
 | Other built-in extensions | bcmath, calendar, ctype, exif, fileinfo, filter, iconv, mbstring, Phar, posix, session, tokenizer |
 | Loading extensions at runtime | Works. See [Extensions](#extensions). |
 | Other extensions (`curl`, `intl`, `gd`, `zip`, `pgsql`, ...) | Not built yet |

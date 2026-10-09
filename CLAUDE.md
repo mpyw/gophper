@@ -44,4 +44,7 @@ declscope runs with `.declscope.yaml` (`qualify: ondemand`, `exported: true`). R
 | Passing router details in variables and unsetting them | With PHP's built-in `variables_order=EGPCS`, `getenv()` returns a copy of `$_ENV` taken at startup, so `putenv()` cannot hide them. The default php.ini sets `GPCS`, as `php.ini-production` does. |
 | FastCGI running any `SCRIPT_FILENAME` | A web server could pass an uploaded file. `LimitExtensions` defaults to `.php` and `.phar`, like php-fpm's `security.limit_extensions`. |
 | Ignoring the wasm binaries in Git | `go build` would need wasi-sdk, bison and re2c. They are committed in gophper-wasm instead. |
+| A symlink to gophper as `PHP_BINARY` | PHP resolves `PHP_BINARY` with `realpath`, which drops the name `php` that selects the subcommand. `cmd/gophper/phpbinary.go` writes a shell script instead. |
+| Giving a child the instance's stdout as is | In `serve`, it is the HTTP response, and a child may outlive the request. `hostproc` hands children a writer that drops output once the run is over. |
+| Letting PHP signal any host process | `proc_kill` reaches only the instance's own children. A script cannot kill gophper or other processes. |
 | `caddy/` as a separate Go module with its own `gophper-caddy` binary | Two binaries to install, and two `replace` lines while developing. The Go linker drops packages nobody imports, so one module costs the core nothing. |

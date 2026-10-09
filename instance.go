@@ -13,6 +13,7 @@ import (
 
 	"github.com/mpyw/gophper/internal/dylink"
 	"github.com/mpyw/gophper/internal/hostnet"
+	"github.com/mpyw/gophper/internal/hostproc"
 )
 
 // engineInstance is the host side of one running PHP instance.
@@ -30,10 +31,11 @@ import (
 // A script blocked inside an internal function, other than sleep and
 // sockets, stops only when that function returns.
 type engineInstance struct {
-	ctx     context.Context
-	sockets *hostnet.Sockets
-	linker  *dylink.Linker
-	memory  engineMemory
+	ctx       context.Context
+	sockets   *hostnet.Sockets
+	processes *hostproc.Processes
+	linker    *dylink.Linker
+	memory    engineMemory
 
 	// Addresses of EG(vm_interrupt), EG(timed_out) and EG(hard_timeout).
 	vmInterrupt, timedOut, hardTimeout uint32
@@ -44,9 +46,10 @@ type engineInstance struct {
 	interrupted chan struct{}
 }
 
-func newEngineInstance(ctx context.Context, extensions *dylink.Cache) *engineInstance {
+func newEngineInstance(ctx context.Context, extensions *dylink.Cache, opts Options) *engineInstance {
 	inst := &engineInstance{ctx: ctx, interrupted: make(chan struct{}), linker: dylink.NewLinker(extensions)}
 	inst.sockets = hostnet.NewSockets(inst)
+	inst.processes = hostproc.NewProcesses(inst, inst.sockets, opts.Stdin, opts.Stdout, opts.Stderr)
 	return inst
 }
 

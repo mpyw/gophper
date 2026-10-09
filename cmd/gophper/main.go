@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"syscall"
@@ -28,6 +29,7 @@ import (
 
 	caddycmd "github.com/caddyserver/caddy/v2/cmd"
 	_ "github.com/caddyserver/caddy/v2/modules/standard"
+	phpext "github.com/mpyw/gophper-wasm/ext"
 	"github.com/tetratelabs/wazero"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/crypto/acme/autocert"
@@ -113,6 +115,25 @@ func newRootCommand() *cli.Command {
 					"\"gophper caddy run --config Caddyfile\". See \"gophper caddy help\".",
 				SkipFlagParsing: true,
 				Action:          caddyAction,
+			},
+			{
+				Name:  "extension",
+				Usage: "manage the extensions that come with gophper",
+				Commands: []*cli.Command{
+					{
+						Name:   "list",
+						Usage:  "list the extensions that come with gophper",
+						Action: extensionListAction,
+					},
+					{
+						Name:      "install",
+						Usage:     "write extensions to --extension-dir as <name>.so",
+						ArgsUsage: "name...",
+						Description: "Then load one with extension=<name>, as in\n" +
+							"\"gophper --extension-dir DIR php -d extension=<name>\".",
+						Action: extensionInstallAction,
+					},
+				},
 			},
 			{
 				Name:  "fcgi",
@@ -298,8 +319,18 @@ func keyValues(flag string) func([]string) error {
 
 func newEngine(ctx context.Context, cmd *cli.Command) (*gophper.Engine, error) {
 	cfg := gophper.EngineConfig{CacheDir: cmd.String("cache-dir")}
+	// The global options again, for PHP_BINARY's script.
+	var global []string
 	if cmd.Bool("no-cache") {
 		cfg.CacheDir = ""
+		global = append(global, "--no-cache")
+	} else if cfg.CacheDir != "" {
+		abs, err := filepath.Abs(cfg.CacheDir)
+		if err != nil {
+			return nil, err
+		}
+		cfg.CacheDir = abs
+		global = append(global, "--cache-dir", abs)
 	}
 	if dir := cmd.String("extension-dir"); dir != "" {
 		abs, err := filepath.Abs(dir)
@@ -307,7 +338,14 @@ func newEngine(ctx context.Context, cmd *cli.Command) (*gophper.Engine, error) {
 			return nil, err
 		}
 		cfg.ExtensionDir = abs
+		global = append(global, "--extension-dir", abs)
 	}
+	bin, err := phpBinaryScript(cfg.CacheDir, global)
+	if err != nil {
+		// PHP still runs. Only PHP_BINARY is empty.
+		fmt.Fprintf(cmd.Root().ErrWriter, "gophper: PHP_BINARY: %v\n", err)
+	}
+	cfg.PHPBinary = bin
 	return gophper.NewEngine(ctx, cfg)
 }
 
@@ -544,6 +582,41 @@ func fcgiAction(ctx context.Context, cmd *cli.Command) error {
 }
 
 // caddyAction hands the arguments to Caddy's own command line. It exits.
+func extensionListAction(_ context.Context, cmd *cli.Command) error {
+	for _, name := range phpext.Names() {
+		fmt.Fprintln(cmd.Root().Writer, name)
+	}
+	return nil
+}
+
+func extensionInstallAction(_ context.Context, cmd *cli.Command) error {
+	dir := cmd.Root().String("extension-dir")
+	switch {
+	case dir == "":
+		return errors.New("extension install: set --extension-dir, before the subcommand")
+	case cmd.Args().Len() == 0:
+		return fmt.Errorf("extension install: name an extension (%s)", strings.Join(phpext.Names(), ", "))
+	}
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		return err
+	}
+	for _, name := range cmd.Args().Slice() {
+		if !slices.Contains(phpext.Names(), name) {
+			return fmt.Errorf("extension install: no extension %q (%s)", name, strings.Join(phpext.Names(), ", "))
+		}
+		so, err := phpext.Open(name)
+		if err != nil {
+			return err
+		}
+		path := filepath.Join(dir, name+".so")
+		if err := os.WriteFile(path, so, 0o644); err != nil {
+			return err
+		}
+		fmt.Fprintln(cmd.Root().Writer, path)
+	}
+	return nil
+}
+
 func caddyAction(_ context.Context, cmd *cli.Command) error {
 	os.Args = append([]string{"gophper caddy"}, cmd.Args().Slice()...)
 	caddycmd.Main()

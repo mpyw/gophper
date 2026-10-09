@@ -69,6 +69,8 @@ func ExportSockets(b wazero.HostModuleBuilder, from func(context.Context) *Socke
 		"sock_setopt":    x.setopt,
 		"sock_poll":      x.poll,
 		"sock_available": x.available,
+		"pipe_open":      x.pipeOpen,
+		"sock_pair":      x.pair,
 	}
 	for name, fn := range fns {
 		b.NewFunctionBuilder().WithFunc(fn).Export(name)
@@ -248,6 +250,7 @@ func (t *Sockets) attach(e *socketEntry, conn net.Conn) {
 		return
 	}
 	e.conn = conn
+	e.reading = true
 	if tc, ok := conn.(*net.TCPConn); ok {
 		// Native sockets start with Nagle on. Go turns it off by default.
 		tc.SetNoDelay(e.nodelay)
@@ -282,6 +285,14 @@ type socketEntry struct {
 
 	// soError is SO_ERROR: a failed non-blocking connect, cleared once read.
 	soError int32
+
+	// pipe is set for an end of a pipe(2).
+	pipe socketPipeEnd
+	// lazy is set for a pipe or socketpair(2) end. Nothing reads it ahead
+	// until PHP reads or polls it: the end may be for a child process, and
+	// reading ahead would take its input.
+	lazy    bool
+	reading bool
 
 	nodelay, keepalive, reuseaddr, broadcast bool
 	rcvbuf, sndbuf                           int32
@@ -332,6 +343,8 @@ func (e *socketEntry) events(want int32) int32 {
 	case e.datagram():
 		in = len(e.packets) > 0
 		out = true
+	case e.pipe == socketPipeWrite:
+		out = !e.closed
 	default:
 		failed := !e.connecting && e.conn == nil && e.soError != 0
 		in = len(e.recvBuf) > 0 || e.recvErr != nil || failed
@@ -594,6 +607,10 @@ func (x socketExports) recv(ctx context.Context, m api.Module, fd int32, bufPtr 
 		}
 		return -errnoENOTCONN
 	}
+	if e.pipe == socketPipeWrite {
+		return -errnoEBADF
+	}
+	t.startReading(e)
 	ready := func() bool {
 		return len(e.recvBuf) > 0 || e.recvErr != nil || e.closed || (!e.connecting && e.conn == nil)
 	}
@@ -883,6 +900,9 @@ func (x socketExports) poll(ctx context.Context, m api.Module, fdsPtr, eventsPtr
 		count = 0
 		for i, fd := range fds {
 			if e := t.entries[fd]; e != nil {
+				if want[i]&socketPollIn != 0 {
+					t.startReading(e)
+				}
 				got[i] = e.events(want[i])
 			} else {
 				got[i] = socketPollErr
@@ -920,6 +940,7 @@ func (x socketExports) available(ctx context.Context, fd int32) int32 {
 		}
 		return 0
 	}
+	t.startReading(e)
 	return int32(len(e.recvBuf))
 }
 
