@@ -30,5 +30,8 @@ var errnoByPlatform = []errnoMapping{
 	{syscall.Errno(10065), wasi.EHOSTUNREACH},  // WSAEHOSTUNREACH
 	{syscall.Errno(64), wasi.ECONNRESET},       // ERROR_NETNAME_DELETED
 	{syscall.Errno(1225), wasi.ECONNREFUSED},   // ERROR_CONNECTION_REFUSED
+	{syscall.Errno(1231), wasi.ENETUNREACH},    // ERROR_NETWORK_UNREACHABLE
+	{syscall.Errno(1232), wasi.EHOSTUNREACH},   // ERROR_HOST_UNREACHABLE
+	{syscall.Errno(1236), wasi.ECONNABORTED},   // ERROR_CONNECTION_ABORTED
 	{syscall.Errno(1234), wasi.ECONNREFUSED},   // ERROR_PORT_UNREACHABLE
 }

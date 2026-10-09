@@ -247,6 +247,7 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 		binDir = filepath.Dir(e.phpBinary)
 	}
 	inst := newEngineInstance(ctx, cancel, e.dylink, binDir, opts)
+	defer inst.signals.Stop()
 	defer inst.sockets.Close()
 	defer inst.processes.Close()
 	defer inst.system.Close()
@@ -309,7 +310,7 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 	if err := inst.vm.Locate(m); err != nil {
 		return 0, err
 	}
-	defer inst.vm.SetTimeout(0)
+	defer inst.vm.Stop()
 	if err := ctx.Err(); err != nil {
 		return 0, err
 	}

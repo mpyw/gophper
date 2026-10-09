@@ -9,6 +9,8 @@ func TestGuestAndHost(t *testing.T) {
 		{`D:\a\b`, "/d/a/b"},
 		{`C:\`, "/c"},
 		{`c:\Users\x y\file.php`, "/c/Users/x y/file.php"},
+		{`C:foo\bar`, "C:foo/bar"},
+		{`\\server\share\x`, "//server/share/x"},
 	} {
 		if got := Guest(tt.host); got != tt.guest {
 			t.Errorf("Guest(%q) = %q, want %q", tt.host, got, tt.guest)
@@ -24,6 +26,10 @@ func TestGuestAndHost(t *testing.T) {
 		{"/", "", false},
 		{"/tmp", "", false},
 		{"relative", "", false},
+		{"/C/x", "", false},
+		{"/c/a/../../d/x", `D:\x`, true},
+		{`/c/a\..\..`, "", false},
+		{"/c/x:stream", "", false},
 	} {
 		if got, ok := Host(tt.guest); got != tt.host || ok != tt.ok {
 			t.Errorf("Host(%q) = %q, %v, want %q, %v", tt.guest, got, ok, tt.host, tt.ok)

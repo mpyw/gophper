@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -80,6 +81,7 @@ func TestHTTPRouting(t *testing.T) {
 		{"/sub", "301", ""},
 		{"/created", "201", "created\n"},
 		{"/redirect", "302", ""},
+		{"/bad-status", "502", ""},
 	} {
 		res, body := get(t, srv.URL+tc.path)
 		if got := res.Status[:3]; got != tc.status || (tc.body != "" && body != tc.body) {
@@ -155,6 +157,30 @@ func TestHTTPPost(t *testing.T) {
 	_ = res.Body.Close()
 	if !strings.Contains(string(body), `"raw":"chunked body"`) {
 		t.Errorf("got %s", body)
+	}
+}
+
+// A header name with an underscore would pass for one with a dash.
+func TestHTTPHeaderUnderscore(t *testing.T) {
+	srv := startHTTP(t)
+	for header, want := range map[string]string{"X-Real-IP": "trusted\n", "X-Real_IP": "none\n"} {
+		req, err := http.NewRequest(http.MethodGet, srv.URL+"/real-ip", nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header[header] = []string{"trusted"}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, err := io.ReadAll(res.Body)
+		_ = res.Body.Close() // the body is read in full
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(body) != want {
+			t.Errorf("%s: got %q, want %q", header, body, want)
+		}
 	}
 }
 
@@ -346,5 +372,26 @@ func TestHTTPAccessLog(t *testing.T) {
 	defer mu.Unlock()
 	if !regexp.MustCompile(`^127\.0\.0\.1 - - \[[^]]+\] "GET /created HTTP/1.1" 201 8 [0-9.]+s\n$`).MatchString(log.String()) {
 		t.Errorf("access log: %q", log.String())
+	}
+}
+
+// TestHTTPScriptSourceStaysHidden asks for a script in other cases. On a
+// file system that ignores case, as Windows' and macOS's do, x.PHP is
+// x.php: it must run, never be sent as its source.
+func TestHTTPScriptSourceStaysHidden(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "secret.php"), []byte(`<?php echo "ran";`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	srv := startHTTPWith(t, func(c *server.HTTPConfig) {
+		c.Root = root
+		c.Mounts = []server.Mount{{Dir: root}}
+		c.NoFrontController = true
+	})
+	for _, p := range []string{"/secret.php", "/secret.PHP", "/Secret.Php", `/a%5c..%5csecret.php`} {
+		_, body := get(t, srv.URL+p)
+		if strings.Contains(body, "<?php") {
+			t.Errorf("%s sent the source: %q", p, body)
+		}
 	}
 }

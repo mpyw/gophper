@@ -334,6 +334,25 @@ These come with gophper:
 > A script blocked reading a socket is not stopped by `max_execution_time`.
 > Native PHP on Linux behaves the same, since it counts CPU time.
 
+> [!NOTE]
+> Go cannot preempt WebAssembly. PHP gives the Go scheduler a turn every so many VM instructions.
+> A long loop inside one C function, such as a huge `preg_match`, holds its thread until it returns.
+
+## Windows
+
+gophper runs on Windows too. These differ from Unix:
+
+| Topic | On Windows |
+| --- | --- |
+| Paths | PHP sees each drive at `/c`, `/d` and so on. `C:\app\index.php` is `/c/app/index.php`. `gophper php` converts absolute path arguments. In Go, convert with `gophper.HostToGuest`. |
+| Temporary files | `gophper php` sets `TMPDIR` to the host's temporary directory, if unset. |
+| `proc_open` and the like | Commands run with `sh` from `PATH`, as Git for Windows provides. Without one, they run with `cmd.exe /s /c`. |
+| `PHP_BINARY` | Empty. It needs `/bin/sh`. |
+| Users and groups | The uid and gid are 1000. Every file is owned by them. |
+| `stream_socket_pair` | Two loopback TCP sockets, as Windows has no `socketpair`. |
+| `flock` | Converting a lock between shared and exclusive unlocks it first. Another process can take it in between. |
+| `is_writable` | Only the read-only attribute counts. |
+
 ## Performance
 
 On an Apple Silicon Mac:

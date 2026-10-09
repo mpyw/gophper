@@ -65,6 +65,12 @@ type pool struct {
 //declscope:shared // http.go and fastcgi.go answer it with 503
 var errPoolBusy = errors.New("no PHP instance became free within the maximum wait time")
 
+// poolEnforcedINI comes after the user's entries, so that it wins.
+// FastCGIServer checks the file php-cgi walks SCRIPT_FILENAME back to.
+// With cgi.fix_pathinfo=0, php-cgi would take PATH_TRANSLATED instead,
+// which nothing checks.
+var poolEnforcedINI = []string{"cgi.fix_pathinfo=1"}
+
 // poolINI comes before the user's entries. It replaces what php-cgi would
 // otherwise need from the environment, so nothing extra shows in getenv()
 // or $_SERVER.
@@ -179,7 +185,13 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 	if files == nil {
 		files = map[string]string{}
 	}
-	files["php.ini"] = strings.Join(slices.Concat(poolINI, opcacheINI, cfg.INI), "\n") + "\n"
+	// The enforced entries go before the user's [PATH=] and [HOST=]
+	// sections, which would hold them otherwise.
+	user, sections := cfg.INI, []string(nil)
+	if i := slices.IndexFunc(cfg.INI, iniSpecialSection); i >= 0 {
+		user, sections = cfg.INI[:i], cfg.INI[i:]
+	}
+	files["php.ini"] = strings.Join(slices.Concat(poolINI, opcacheINI, user, poolEnforcedINI, sections), "\n") + "\n"
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(iniDir, name), []byte(content), 0o644); err != nil {
 			_ = os.RemoveAll(iniDir) // the write error is the one to report
@@ -244,6 +256,24 @@ func (p *pool) mounted(path string) bool {
 	return slices.ContainsFunc(p.mounts, func(m Mount) bool { return m.contains(path) })
 }
 
+// mountSpelling writes a host path inside a mount with the mount's own
+// spelling. Windows matches paths without case, so C:\App\x.php is inside
+// C:\app, but PHP finds it only at the mount's guest path, /c/app/x.php.
+//
+//declscope:shared // http.go spells the document root with it, fastcgi.go each script
+func (p *pool) mountSpelling(path string) string {
+	best, rel := "", ""
+	for _, m := range p.mounts {
+		if r, err := filepath.Rel(m.Dir, path); err == nil && m.contains(path) && len(m.Dir) > len(best) {
+			best, rel = m.Dir, r
+		}
+	}
+	if best == "" {
+		return path
+	}
+	return filepath.Join(best, rel)
+}
+
 // bootstrapPath is where PHP sees one of the files newPool was given.
 //
 //declscope:shared // http.go runs its router bootstrap from there
@@ -303,7 +333,11 @@ func (p *pool) run(ctx context.Context, vars map[string]string, stdin io.Reader,
 // hostPath maps a path inside PHP to the host, as the mounts do. The mount
 // with the longest path wins, as wasi-libc picks among its preopens: a
 // project under /tmp is its own mount, not TempDir's.
-func (p *pool) hostPath(path string) (string, bool, bool) {
+func (p *pool) hostPath(guest string) (string, bool, bool) {
+	path, ok := hostpath.CleanGuest(guest)
+	if !ok {
+		return "", false, false
+	}
 	type poolPlace struct {
 		guest, host string
 		writable    bool
@@ -334,7 +368,13 @@ func (p *pool) hostPath(path string) (string, bool, bool) {
 		return "", false, false
 	}
 	pl := places[best]
-	return filepath.Join(pl.host, filepath.FromSlash(rest)), pl.writable, true
+	host := filepath.Join(pl.host, filepath.FromSlash(rest))
+	// path is clean, so this holds. It is checked anyway: a path that left
+	// its mount would reach the host outside the sandbox.
+	if rel, err := filepath.Rel(pl.host, host); err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false, false
+	}
+	return host, pl.writable, true
 }
 
 // logAccess writes a Common Log Format line, plus the time taken.

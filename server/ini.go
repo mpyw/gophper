@@ -33,6 +33,8 @@ func MergeINIFile(path string, ini []string) ([]string, error) {
 // to some paths or hosts only. PHP matches the prefix case-insensitively,
 // after it removes the quotes of ["PATH=/x"] or ['PATH=/x']. Spaces count
 // only before a quote: [ PATH=/x] is an ordinary section.
+//
+//declscope:shared // pool.go puts its enforced entries before the sections
 func iniSpecialSection(line string) bool {
 	name, ok := strings.CutPrefix(strings.TrimSpace(line), "[")
 	if !ok {

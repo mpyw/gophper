@@ -508,3 +508,30 @@ func TestServeLargeOutput(t *testing.T) {
 		t.Errorf("stdout %d bytes, app status %d", len(res.stdout), res.appStatus)
 	}
 }
+
+// TestServeStopsWithIdleConnection keeps a connection open with no request,
+// as nginx's keep-alive does, and stops the server. Serve must return.
+func TestServeStopsWithIdleConnection(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- Serve(ctx, l, func(context.Context, *Request) int { return 0 }) }()
+	conn, err := net.Dial("tcp", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	time.Sleep(50 * time.Millisecond) // Accepted, and waiting for a record.
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Errorf("Serve: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("Serve did not return while a connection was idle")
+	}
+}

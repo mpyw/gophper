@@ -105,8 +105,12 @@ type Sockets struct {
 	// hostPath maps the path of a Unix socket to the host, as Options.HostPath
 	// does for files. Nil maps none.
 	hostPath SocketsHostPath
-	mu       sync.Mutex
-	entries  map[int32]*socketEntry
+	// names maps the host paths of Unix sockets back to the paths PHP gave.
+	// A mount can put a path elsewhere, as the server does with /tmp.
+	namesMu sync.Mutex
+	names   map[string]string
+	mu      sync.Mutex
+	entries map[int32]*socketEntry
 	// changed is closed on any change to any socket, then replaced.
 	changed chan struct{}
 }
@@ -135,7 +139,28 @@ func (t *Sockets) unixHost(path string, create bool) (string, int32) {
 	case create && !writable:
 		return "", wasi.EROFS
 	}
+	t.namesMu.Lock()
+	defer t.namesMu.Unlock()
+	// A worker lives through many scripts. Forgetting old names only
+	// makes them look as the default mapping would.
+	if t.names == nil || len(t.names) >= 1024 {
+		t.names = map[string]string{}
+	}
+	t.names[host] = path
 	return host, 0
+}
+
+// addrText formats an address as gophper-wasm's compat/gophper_net.c
+// parses it. A Unix socket's name is the path PHP gave.
+func (t *Sockets) addrText(a net.Addr) string {
+	if ua, ok := a.(*net.UnixAddr); ok && ua.Name != "" {
+		t.namesMu.Lock()
+		defer t.namesMu.Unlock()
+		if guest, ok := t.names[ua.Name]; ok {
+			return guest
+		}
+	}
+	return socketAddrText(a)
 }
 
 // Close closes every socket the script left open.
@@ -233,7 +258,7 @@ func (t *Sockets) readPackets(e *socketEntry, pc net.PacketConn, conn net.Conn) 
 		}
 		t.mu.Lock()
 		if err == nil {
-			e.packets = append(e.packets, socketPacket{data: append([]byte(nil), buf[:n]...), from: socketAddrText(from)})
+			e.packets = append(e.packets, socketPacket{data: append([]byte(nil), buf[:n]...), from: t.addrText(from)})
 			// Like a full socket buffer, drop the oldest rather than block.
 			if len(e.packets) > 256 {
 				e.packets = e.packets[1:]
@@ -406,13 +431,13 @@ type socketPacket struct {
 	from string
 }
 
-// socketAddrText formats an address as gophper-wasm's compat/gophper_net.c parses it.
+// socketAddrText formats an address that no path PHP gave names.
 func socketAddrText(a net.Addr) string {
 	if a == nil {
 		return ""
 	}
 	if ua, ok := a.(*net.UnixAddr); ok && ua.Name != "" {
-		// The guest's path, as the mounts map it.
+		// A peer's path, as the default mapping would name it.
 		return hostpath.Guest(ua.Name)
 	}
 	return a.String()
@@ -679,7 +704,7 @@ func (x socketExports) recv(ctx context.Context, m api.Module, fd int32, bufPtr 
 			t.notify()
 		}
 		if e.conn != nil {
-			socketWriteText(m, socketAddrText(e.conn.RemoteAddr()), fromPtr, fromCap, fromLenPtr)
+			socketWriteText(m, t.addrText(e.conn.RemoteAddr()), fromPtr, fromCap, fromLenPtr)
 		}
 		return int32(size)
 	}
@@ -723,7 +748,7 @@ func (x socketExports) send(ctx context.Context, m api.Module, fd int32, bufPtr 
 	}
 
 	if e.datagram() {
-		if e.conn != nil && to != "" && to != socketAddrText(e.conn.RemoteAddr()) {
+		if e.conn != nil && to != "" && to != t.addrText(e.conn.RemoteAddr()) {
 			// As on BSD, a connected socket sends only to its peer. Sending
 			// through e.packet would come from another port.
 			t.mu.Unlock()
@@ -854,13 +879,13 @@ func (x socketExports) name(ctx context.Context, m api.Module, fd, peer int32, o
 	case peer != 0 && e.conn == nil:
 		return wasi.ENOTCONN
 	case peer != 0:
-		text = socketAddrText(e.conn.RemoteAddr())
+		text = t.addrText(e.conn.RemoteAddr())
 	case e.conn != nil:
-		text = socketAddrText(e.conn.LocalAddr())
+		text = t.addrText(e.conn.LocalAddr())
 	case e.listener != nil:
-		text = socketAddrText(e.listener.Addr())
+		text = t.addrText(e.listener.Addr())
 	case e.packet != nil:
-		text = socketAddrText(e.packet.LocalAddr())
+		text = t.addrText(e.packet.LocalAddr())
 	case e.bound != "":
 		text = e.bound
 	case e.kind == socketTCP || e.kind == socketUDP:

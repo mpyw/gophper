@@ -31,7 +31,8 @@ type PHPConfig struct {
 	// keeps them in its own shared memory, which ends with the worker, and
 	// a fresh instance starts with none. The files outlive both. Each build
 	// of the PHP binaries gets a directory inside. Default: "gophper/opcache"
-	// in the user cache directory.
+	// in the user cache directory. PHP runs whatever it finds there, so
+	// anyone who can write to it can run code in every pool that uses it.
 	OpcacheDir string
 	// NoOpcache leaves opcache off.
 	NoOpcache bool

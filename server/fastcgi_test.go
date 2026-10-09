@@ -749,3 +749,34 @@ func TestFastCGIAbort(t *testing.T) {
 		t.Errorf("the next request: %v %+v", err, res)
 	}
 }
+
+// TestFastCGILimitExtensionsWalkBack sends a script path that php-cgi walks
+// back to an uploaded file, and one that turns cgi.fix_pathinfo off. Both
+// are denied: what runs is checked, not what was asked for.
+func TestFastCGILimitExtensionsWalkBack(t *testing.T) {
+	for _, ini := range [][]string{nil, {"cgi.fix_pathinfo=0"}} {
+		fastCGILimitExtensionsWalkBack(t, ini)
+	}
+}
+
+func fastCGILimitExtensionsWalkBack(t *testing.T, ini []string) {
+	t.Helper()
+	addr, root := startFCGIWith(t, func(cfg *server.FastCGIConfig) { cfg.INI = ini })
+	upload := filepath.Join(root, "upload-test.jpg")
+	if err := os.WriteFile(upload, []byte(`<?php echo "ran the upload";`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Remove(upload) })
+	for _, p := range []map[string]string{
+		params(root, "GET", "/upload-test.jpg/x.php", map[string]string{"SCRIPT_FILENAME": upload + "/x.php"}),
+		params(root, "GET", "/index.php", map[string]string{"PATH_TRANSLATED": upload}),
+	} {
+		res, err := dialFCGI(t, addr).do(1, false, p, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(res.Body, "ran the upload") {
+			t.Errorf("INI %q: SCRIPT_FILENAME %q, PATH_TRANSLATED %q ran the upload", ini, p["SCRIPT_FILENAME"], p["PATH_TRANSLATED"])
+		}
+	}
+}

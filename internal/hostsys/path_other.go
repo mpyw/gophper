@@ -16,8 +16,16 @@ func systemOwner(fs.FileInfo) (uint32, uint32) {
 	return uid, gid
 }
 
-// systemAccess checks only that the file exists.
-func systemAccess(path string, _ int32) error {
-	_, err := os.Stat(path)
-	return err
+// systemAccess checks that the file exists, and for writing, that it is not
+// read-only. Windows ignores that attribute on a directory, and has no other
+// permissions that Go reports.
+func systemAccess(path string, mode int32) error {
+	fi, err := os.Stat(path)
+	if err != nil {
+		return err
+	}
+	if mode&systemAccessWrite != 0 && !fi.IsDir() && fi.Mode().Perm()&0o200 == 0 {
+		return fs.ErrPermission
+	}
+	return nil
 }

@@ -108,6 +108,7 @@ func TestValueDecodeErrors(t *testing.T) {
 		"short count":  {valueArray, 0},
 		"no key":       arr(1),
 		"no value":     arr(1, valueTestInt(0)...),
+		"huge count":   arr(1<<32-1, valueNull, valueNull),
 		"unknown tag":  {'?'},
 	} {
 		if v, _, err := valueDecode(b); err == nil {

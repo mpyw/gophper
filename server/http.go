@@ -99,6 +99,7 @@ func NewHTTPHandler(engine *gophper.Engine, cfg HTTPConfig) (*HTTPHandler, error
 	if err != nil || !p.mounted(cwd) {
 		cwd = root
 	}
+	cfg.Root, cfg.Router, cwd = p.mountSpelling(cfg.Root), p.mountSpelling(cfg.Router), p.mountSpelling(cwd)
 	return &HTTPHandler{pool: p, cfg: cfg, cwd: cwd}, nil
 }
 
@@ -115,7 +116,7 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}()
 
 	clean := path.Clean("/" + r.URL.Path)
-	if httpHidden(clean) {
+	if httpHidden(clean) || httpUnsafe(clean) {
 		http.NotFound(rec, r)
 		return
 	}
@@ -151,6 +152,17 @@ func httpHidden(clean string) bool {
 	return false
 }
 
+// isScriptName reports a file name ending in a SplitPath suffix, in any case.
+func (h *HTTPHandler) isScriptName(name string) bool {
+	lower := strings.ToLower(name)
+	for _, suffix := range h.cfg.SplitPath {
+		if strings.HasSuffix(lower, strings.ToLower(suffix)) {
+			return true
+		}
+	}
+	return false
+}
+
 // httpRoute is where a request path leads. At most one field is set.
 type httpRoute struct {
 	// script is the URL path of the PHP script, and pathInfo what follows it.
@@ -169,7 +181,9 @@ func (h *HTTPHandler) route(urlPath, clean string) httpRoute {
 	full := h.hostPath(clean)
 	if fi, err := os.Stat(full); err == nil {
 		if !fi.IsDir() {
-			if h.cfg.NoStatic {
+			if h.cfg.NoStatic || h.isScriptName(full) {
+				// A script is never sent as it is, whatever made it miss
+				// splitScript: its source may hold secrets.
 				return httpRoute{}
 			}
 			return httpRoute{static: full}
@@ -195,8 +209,11 @@ func (h *HTTPHandler) route(urlPath, clean string) httpRoute {
 func (h *HTTPHandler) splitScript(clean string) (script, pathInfo string, ok bool) {
 	for i := 0; i < len(clean); {
 		end, found := -1, false
+		// Without case: on Windows and macOS, x.PHP is x.php, and must run
+		// rather than be sent as it is.
+		lower := strings.ToLower(clean[i:])
 		for _, suffix := range h.cfg.SplitPath {
-			j := strings.Index(clean[i:], suffix)
+			j := strings.Index(lower, strings.ToLower(suffix))
 			if j < 0 {
 				continue
 			}
@@ -328,7 +345,14 @@ func (h *HTTPHandler) servePHP(w *httpRecorder, r *http.Request, route httpRoute
 	}
 	status := http.StatusOK
 	if s := hdr.Get("Status"); s != "" {
-		if code, err := strconv.Atoi(strings.Fields(s)[0]); err == nil {
+		code, err := strconv.Atoi(strings.Fields(s)[0])
+		switch {
+		case err != nil:
+		case code < 200 || code > 999:
+			// net/http panics outside 100-999, and an informational code
+			// would let it send a 200 of its own after.
+			status = http.StatusBadGateway
+		default:
 			status = code
 		}
 		hdr.Del("Status")
@@ -416,6 +440,11 @@ func (h *HTTPHandler) env(r *http.Request, route httpRoute, contentLength int64)
 			// httpoxy: HTTP_PROXY would be read as a proxy setting.
 			continue
 		}
+		if strings.Contains(k, "_") {
+			// X-Real_IP would pass for X-Real-IP, which a proxy in front
+			// may have set. nginx and Apache drop these too.
+			continue
+		}
 		sep := ", "
 		if k == "Cookie" {
 			sep = "; "
@@ -455,6 +484,8 @@ const httpBodyMemory = 1 << 20
 // CONTENT_LENGTH before it ends a request, so a client that sent its body
 // slowly would hold a PHP instance as long as it liked. It also gives a
 // chunked body the length that php-cgi needs.
+//
+//declscope:shared // fastcgi.go buffers FCGI_STDIN with it
 func httpBufferBody(body io.Reader) (io.Reader, int64, func(), error) {
 	var buf bytes.Buffer
 	n, err := io.CopyN(&buf, body, httpBodyMemory+1)

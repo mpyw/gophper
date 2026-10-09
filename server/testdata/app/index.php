@@ -11,6 +11,14 @@ if ($path === '/created') {
     echo "created\n";
     exit;
 }
+if ($path === '/bad-status') {
+    header('Status: 42 Nonsense');
+    exit;
+}
+if ($path === '/real-ip') {
+    echo $_SERVER['HTTP_X_REAL_IP'] ?? 'none', "\n";
+    exit;
+}
 if ($path === '/post') {
     echo json_encode(['post' => $_POST, 'cookie' => $_COOKIE, 'raw' => file_get_contents('php://input')]);
     exit;

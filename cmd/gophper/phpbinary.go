@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -40,6 +41,19 @@ func phpBinaryScript(cacheDir string, args []string) (string, error) {
 	base := cacheDir
 	if base == "" {
 		base = filepath.Join(os.TempDir(), fmt.Sprintf("gophper-%d", os.Getuid()))
+		// Anyone can create this name first, and then replace the script
+		// between our write and PHP's exec. So only a private directory of
+		// our own will do.
+		if err := os.Mkdir(base, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
+			return "", err
+		}
+		fi, err := os.Lstat(base)
+		if err != nil {
+			return "", err
+		}
+		if !fi.IsDir() || fi.Mode().Perm()&0o077 != 0 || !phpBinaryOwned(fi) {
+			return "", fmt.Errorf("%s: not a private directory of this user", base)
+		}
 	}
 	sum := sha256.Sum256([]byte(script))
 	dir := filepath.Join(base, "bin", hex.EncodeToString(sum[:8]))

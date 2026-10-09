@@ -221,6 +221,38 @@ func TestSocketUnixSandbox(t *testing.T) {
 	}
 }
 
+// TestSocketUnixMappedName binds a Unix socket at a path that HostPath puts
+// elsewhere. PHP reads back the path it gave, not the host's.
+func TestSocketUnixMappedName(t *testing.T) {
+	dir, err := os.MkdirTemp(netShortTempBase(), "gophper")
+	if err != nil {
+		t.Skip(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	var out bytes.Buffer
+	_, err = newTestEngine(t).RunCLI(context.Background(), gophper.Options{
+		Args: []string{"-r", `
+			$s = stream_socket_server("unix:///run/php.sock", $errno, $errstr) or die("$errno $errstr");
+			$c = stream_socket_client("unix:///run/php.sock", $errno, $errstr, 5) or die("$errno $errstr");
+			echo stream_socket_get_name($s, false), " ", stream_socket_get_name($c, true), "\n";
+		`},
+		HostPath: func(path string) (string, bool, bool) {
+			if path != "/run/php.sock" {
+				return "", false, false
+			}
+			return filepath.Join(dir, "host.sock"), true, true
+		},
+		Stdout: &out,
+		Stderr: &out,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "/run/php.sock /run/php.sock\n"; out.String() != want {
+		t.Errorf("got %q, want %q", out.String(), want)
+	}
+}
+
 func TestSocketUDP(t *testing.T) {
 	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
 	if err != nil {

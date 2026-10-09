@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -174,5 +175,54 @@ func TestPoolStopWaitsForStopping(t *testing.T) {
 	}
 	if _, err := p.poolStart(filepath.Join(t.TempDir(), "late.sock")); err == nil {
 		t.Error("a worker started after poolStopWorkers")
+	}
+}
+
+// TestPoolHostPathStaysInside maps paths with ".." in them. None may leave
+// the mount it starts in: a sandboxed script could chmod any host file.
+func TestPoolHostPathStaysInside(t *testing.T) {
+	p, vars := poolForTest(t)
+	root := filepath.Dir(vars["SCRIPT_FILENAME"])
+	for _, guest := range []string{
+		"/tmp/../../../etc/passwd",
+		"/tmp/../" + filepath.ToSlash(root[1:]) + "/../../outside",
+		gophper.HostToGuest(root) + "/../outside",
+		"relative/path",
+	} {
+		host, _, ok := p.hostPath(guest)
+		if !ok {
+			continue
+		}
+		inside := false
+		for _, dir := range []string{p.tempDir, root} {
+			if rel, err := filepath.Rel(dir, host); err == nil && rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+				inside = true
+			}
+		}
+		if !inside {
+			t.Errorf("%q mapped outside every mount: %q", guest, host)
+		}
+	}
+}
+
+func TestPoolMountSpelling(t *testing.T) {
+	root := t.TempDir()
+	nested := filepath.Join(root, "Nested")
+	p := &pool{mounts: []Mount{{Dir: root}, {Dir: nested}}}
+	tests := map[string]string{
+		filepath.Join(root, "a", "x.php"):   filepath.Join(root, "a", "x.php"),
+		filepath.Join(nested, "x.php"):      filepath.Join(nested, "x.php"),
+		filepath.Dir(root):                  filepath.Dir(root),
+		"":                                  "",
+		filepath.Join(root, "a", "..", "b"): filepath.Join(root, "b"),
+	}
+	if runtime.GOOS == "windows" {
+		// Windows matches paths without case: the mount's spelling wins.
+		tests[strings.ToUpper(filepath.Join(nested, "x.php"))] = filepath.Join(nested, "X.PHP")
+	}
+	for in, want := range tests {
+		if got := p.mountSpelling(in); got != want {
+			t.Errorf("mountSpelling(%q) = %q, want %q", in, got, want)
+		}
 	}
 }

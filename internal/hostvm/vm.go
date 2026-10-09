@@ -44,6 +44,8 @@ type VM struct {
 
 	mu    sync.Mutex
 	timer *time.Timer
+	// stopped keeps a timer that is firing from arming the next one.
+	stopped bool
 	// interrupted is closed by the next interrupt, then replaced.
 	interrupted chan struct{}
 }
@@ -122,9 +124,17 @@ func (v *VM) SetTimeout(seconds int32) {
 		v.timer.Stop()
 		v.timer = nil
 	}
-	if seconds > 0 {
+	if seconds > 0 && !v.stopped {
 		v.timer = time.AfterFunc(time.Duration(seconds)*time.Second, v.fire)
 	}
+}
+
+// Stop cancels the timer for good, at the end of the run.
+func (v *VM) Stop() {
+	v.mu.Lock()
+	v.stopped = true
+	v.mu.Unlock()
+	v.SetTimeout(0)
 }
 
 // fire does what zend_timeout_handler() does for a non-ZTS build.

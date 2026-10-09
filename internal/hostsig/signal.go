@@ -36,6 +36,10 @@ type Signals struct {
 	changed chan struct{}
 	alarm   *time.Timer
 	alarmAt time.Time
+	// grace are the timers that stop a guest slow to act on a fatal signal.
+	grace []*time.Timer
+	// stopped keeps timers from starting after the run.
+	stopped bool
 	// terminated is a fatal signal the guest did not act on in time.
 	terminated int32
 }
@@ -107,16 +111,39 @@ func (s *Signals) Deliver(sig int32) {
 	fatal := s.handled&bit == 0
 	s.mu.Unlock()
 	s.run.Wake()
-	if fatal {
-		time.AfterFunc(signalGrace, func() {
-			s.mu.Lock()
-			if s.terminated == 0 {
-				s.terminated = sig
-			}
-			s.mu.Unlock()
-			s.run.Cancel()
-		})
+	if !fatal {
+		return
 	}
+	t := time.AfterFunc(signalGrace, func() {
+		s.mu.Lock()
+		if s.terminated == 0 {
+			s.terminated = sig
+		}
+		s.mu.Unlock()
+		s.run.Cancel()
+	})
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.stopped {
+		t.Stop()
+		return
+	}
+	s.grace = append(s.grace, t)
+}
+
+// Stop cancels the alarm and the grace timers, at the end of the run.
+func (s *Signals) Stop() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.stopped = true
+	if s.alarm != nil {
+		s.alarm.Stop()
+		s.alarm = nil
+	}
+	for _, t := range s.grace {
+		t.Stop()
+	}
+	s.grace = nil
 }
 
 // Pending reports whether a signal waits for the guest.
@@ -173,7 +200,7 @@ func (s *Signals) SetAlarm(seconds int32) int32 {
 		left = int32(max(time.Until(s.alarmAt).Round(time.Second)/time.Second, 1))
 	}
 	s.alarm = nil
-	if seconds > 0 {
+	if seconds > 0 && !s.stopped {
 		d := time.Duration(seconds) * time.Second
 		s.alarmAt = time.Now().Add(d)
 		s.alarm = time.AfterFunc(d, func() { s.Deliver(signalAlarm) })

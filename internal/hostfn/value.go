@@ -68,6 +68,11 @@ func valueDecode(b []byte) (any, []byte, error) {
 		}
 		n := binary.LittleEndian.Uint32(b)
 		b = b[4:]
+		// Each key and value takes at least a byte, so a longer count is a
+		// lie, and would allocate gigabytes.
+		if uint64(n)*2 > uint64(len(b)) {
+			return nil, nil, errValueShort
+		}
 		keys := make([]any, 0, n)
 		vals := make([]any, 0, n)
 		list := true

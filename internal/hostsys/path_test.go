@@ -233,3 +233,29 @@ func systemInGroup(t *testing.T, st fs.FileInfo) bool {
 	groups, _ := os.Getgroups()
 	return int(gid) == os.Getgid() || slices.Contains(groups, int(gid))
 }
+
+// TestSystemAccessReadOnly refuses to write a read-only file, on every host.
+func TestSystemAccessReadOnly(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "f")
+	if err := os.WriteFile(file, nil, 0o400); err != nil {
+		t.Fatal(err)
+	}
+	// Restored so that the cleanup can remove it on Windows.
+	defer func() { _ = os.Chmod(file, 0o600) }()
+	if os.Getuid() == 0 {
+		t.Skip("root writes anything")
+	}
+	if err := systemAccess(file, systemAccessWrite); systemErrno(err) != wasi.EACCES {
+		t.Errorf("write a read-only file: %v", err)
+	}
+	if err := systemAccess(file, 4); err != nil {
+		t.Errorf("read: %v", err)
+	}
+	if err := systemAccess(dir, systemAccessWrite); err != nil {
+		t.Errorf("write a directory: %v", err)
+	}
+	if err := systemAccess(filepath.Join(dir, "missing"), 4); systemErrno(err) != wasi.ENOENT {
+		t.Errorf("missing: %v", err)
+	}
+}

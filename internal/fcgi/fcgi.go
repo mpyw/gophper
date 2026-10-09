@@ -114,6 +114,10 @@ type serverConn struct {
 	conn net.Conn
 	r    *bufio.Reader
 
+	// dmu guards read deadlines: once stopped, none moves later.
+	dmu     sync.Mutex
+	stopped bool
+
 	mu sync.Mutex
 	w  *bufio.Writer
 }
@@ -192,6 +196,9 @@ type activeRequest struct {
 func (c *serverConn) serve(ctx context.Context, h Handler) {
 	// handle may have closed conn already.
 	defer func() { _ = c.conn.Close() }()
+	// When the server stops, a reader blocked on an idle connection, such
+	// as one nginx keeps alive, wakes and ends. Handlers see ctx too.
+	defer context.AfterFunc(ctx, c.stop)()
 
 	var cur *activeRequest
 	defer func() {
@@ -217,6 +224,9 @@ func (c *serverConn) serve(ctx context.Context, h Handler) {
 			}
 		}
 
+		if cur == nil && !c.readDeadline(time.Now().Add(serverIdle)) {
+			return
+		}
 		rec, err := c.readRecord()
 		if err != nil {
 			return
@@ -270,6 +280,11 @@ func (c *serverConn) serve(ctx context.Context, h Handler) {
 				continue
 			}
 			cur = &activeRequest{id: rec.h.ID, keepConn: rec.content[2]&flagKeepConn != 0, done: make(chan struct{})}
+			// A request may take its time, and the reader waits for its
+			// records, or an FCGI_ABORT_REQUEST, all along.
+			if !c.readDeadline(time.Time{}) {
+				return
+			}
 			continue
 		}
 
@@ -349,6 +364,34 @@ func (c *serverConn) handle(ctx context.Context, h Handler, a *activeRequest, re
 	}
 }
 
+// serverIdle is how long a connection may wait between requests.
+const serverIdle = 2 * time.Minute
+
+// readDeadline sets the read deadline, unless the connection is stopping.
+// It reports false if setting it failed, and the connection is closed.
+func (c *serverConn) readDeadline(t time.Time) bool {
+	c.dmu.Lock()
+	defer c.dmu.Unlock()
+	if c.stopped {
+		return true
+	}
+	if err := c.conn.SetReadDeadline(t); err != nil {
+		_ = c.conn.Close() // A connection with no deadline could hang; its own error says why.
+		return false
+	}
+	return true
+}
+
+// stop wakes the reader for good.
+func (c *serverConn) stop() {
+	c.dmu.Lock()
+	defer c.dmu.Unlock()
+	c.stopped = true
+	if c.conn.SetReadDeadline(time.Unix(1, 0)) != nil {
+		_ = c.conn.Close() // Closing wakes it too.
+	}
+}
+
 // serverLinger is how long a connection without keep-alive waits for the
 // web server to close it, after the response.
 const serverLinger = 5 * time.Second
@@ -359,7 +402,7 @@ const serverLinger = 5 * time.Second
 // would send a RST, and the web server could lose the end of the response.
 func (c *serverConn) lingerClose() {
 	cw, ok := c.conn.(interface{ CloseWrite() error })
-	if !ok || cw.CloseWrite() != nil || c.conn.SetReadDeadline(time.Now().Add(serverLinger)) != nil {
+	if !ok || cw.CloseWrite() != nil || !c.readDeadline(time.Now().Add(serverLinger)) {
 		// No half-close here: closing is all that is left.
 		_ = c.conn.Close()
 	}

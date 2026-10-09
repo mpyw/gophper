@@ -100,7 +100,7 @@ func (x functionExports) call(ctx context.Context, m api.Module, namePtr, nameLe
 // take copies the pending result or message, and forgets it.
 func (x functionExports) take(ctx context.Context, m api.Module, out uint32, capacity int32) int32 {
 	f := x.from(ctx)
-	n := min(len(f.pending), int(capacity))
+	n := max(min(len(f.pending), int(capacity)), 0)
 	m.Memory().Write(out, f.pending[:n])
 	f.pending = nil
 	return int32(n)

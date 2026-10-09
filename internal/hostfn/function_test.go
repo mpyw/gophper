@@ -131,4 +131,9 @@ func TestFunctionCall(t *testing.T) {
 	if b, _ := h.m.Memory().Read(functionOutOff, 4); string(b) != "from" {
 		t.Errorf("took %q", b)
 	}
+	// A negative room is none.
+	h.x.call(context.Background(), h.m, functionNameOff, 4, functionArgsOff, 5)
+	if n := h.x.take(context.Background(), h.m, functionOutOff, -1); n != 0 {
+		t.Errorf("take = %d", n)
+	}
 }

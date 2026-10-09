@@ -18,6 +18,8 @@ import (
 const userWindowsID = 1000
 
 // userCurrentIDs returns userWindowsID, and no other groups.
+//
+//declscope:shared // path_other.go reports every file as this user's
 func userCurrentIDs() (uid, gid uint32, groups []uint32) {
 	return userWindowsID, userWindowsID, nil
 }

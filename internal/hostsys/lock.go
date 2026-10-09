@@ -54,7 +54,8 @@ func (x systemLockExports) lock(ctx context.Context, m api.Module, fd int32, pat
 	if op&(systemLockShared|systemLockExclusive) == 0 {
 		return wasi.EINVAL
 	}
-	if f == nil {
+	opened := f == nil
+	if opened {
 		host, _, ok := s.hostPath(path)
 		if !ok {
 			// No host file: nothing else can hold the lock.
@@ -78,7 +79,10 @@ func (x systemLockExports) lock(ctx context.Context, m api.Module, fd int32, pat
 			keep()
 			return 0
 		case !errors.Is(err, errSystemLockBusy):
-			_ = f.Close() // The lock error wins.
+			if opened {
+				_ = f.Close() // The lock error wins.
+			}
+			// A file kept from before stays, for unlock and close to find.
 			return wasi.EIO
 		case op&systemLockNonblock != 0:
 			keep()

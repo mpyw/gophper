@@ -9,6 +9,7 @@ import (
 	"maps"
 	"net"
 	"net/netip"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -100,7 +101,10 @@ func (s *FastCGIServer) handle(ctx context.Context, r *fcgi.Request) int {
 		return 0
 	}
 
-	script := r.Params["SCRIPT_FILENAME"]
+	// php-cgi runs the longest prefix of SCRIPT_FILENAME that is a file
+	// (cgi.fix_pathinfo), so that is what is checked, as php-fpm does:
+	// uploads/evil.jpg/x.php would run evil.jpg.
+	script := fastCGIScriptFile(r.Params["SCRIPT_FILENAME"])
 	if !slices.Contains(s.cfg.LimitExtensions, filepath.Ext(script)) {
 		writePoolLog(r.Stderr, "gophper: access to the script %q has been denied (see LimitExtensions)\n", script)
 		// The request fails either way, so a failed write changes nothing.
@@ -113,7 +117,17 @@ func (s *FastCGIServer) handle(ctx context.Context, r *fcgi.Request) int {
 		return 1
 	}
 
-	code, err := s.pool.run(ctx, fastCGIGuestParams(r.Params), r.Stdin, out, r.Stderr)
+	// Read in full first, as the HTTP handler does. A body PHP never read
+	// would block the connection's reader, which then could not see the
+	// web server go away or abort the request.
+	stdin, _, cleanup, err := httpBufferBody(r.Stdin)
+	if err != nil {
+		writePoolLog(r.Stderr, "gophper: reading the request body: %v\n", err)
+		_, _ = fmt.Fprint(out, "Status: 400 Bad Request\r\nContent-Type: text/plain\r\n\r\nBad Request\n")
+		return 1
+	}
+	defer cleanup()
+	code, err := s.pool.run(ctx, fastCGIGuestParams(r.Params, s.pool.mountSpelling), stdin, out, r.Stderr)
 	if err != nil {
 		writePoolLog(r.Stderr, "gophper: %s: %v\n", script, err)
 		if out.n == 0 {
@@ -190,12 +204,28 @@ func (l *fastcgiListener) Accept() (net.Conn, error) {
 
 // fastCGIGuestParams returns params with the host paths a web server sends
 // turned into the paths PHP sees. They are the same, except on Windows.
-func fastCGIGuestParams(params map[string]string) map[string]string {
+func fastCGIGuestParams(params map[string]string, spell func(string) string) map[string]string {
 	out := maps.Clone(params)
 	for _, k := range []string{"SCRIPT_FILENAME", "PATH_TRANSLATED", "DOCUMENT_ROOT"} {
 		if v, ok := out[k]; ok && filepath.IsAbs(v) {
-			out[k] = hostpath.Guest(v)
+			out[k] = hostpath.Guest(spell(v))
 		}
 	}
 	return out
+}
+
+// fastCGIScriptFile returns the longest prefix of a script path that is a
+// regular file, as php-cgi walks it back, or the path itself if none is.
+func fastCGIScriptFile(script string) string {
+	p := filepath.Clean(filepath.FromSlash(script))
+	for {
+		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
+			return p
+		}
+		parent := filepath.Dir(p)
+		if parent == p {
+			return script
+		}
+		p = parent
+	}
 }

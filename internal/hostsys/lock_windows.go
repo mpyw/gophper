@@ -31,6 +31,12 @@ func systemLockFile(f *os.File, op int32) error {
 		}
 		return err
 	}
+	// LockFileEx fails on a region the same handle holds, where flock(2)
+	// converts the lock. flock does that by unlocking first, without
+	// atomicity, so this does the same.
+	if err := windows.UnlockFileEx(h, 0, 1, 0, ov); err != nil && !errors.Is(err, windows.ERROR_NOT_LOCKED) {
+		return err
+	}
 	flags := uint32(windows.LOCKFILE_FAIL_IMMEDIATELY)
 	if op == systemLockExclusive {
 		flags |= windows.LOCKFILE_EXCLUSIVE_LOCK

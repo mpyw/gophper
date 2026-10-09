@@ -42,6 +42,12 @@ func main() {
 	}
 
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	// After the first signal, the next ends gophper at once, as a stuck
+	// shutdown would otherwise leave only SIGKILL.
+	go func() {
+		<-ctx.Done()
+		stop()
+	}()
 	err := newRootCommand().Run(ctx, args)
 	stop()
 
@@ -451,8 +457,8 @@ func phpAction(ctx context.Context, cmd *cli.Command) (err error) {
 	signal.Notify(signals, phpSignals...)
 	defer signal.Stop(signals)
 	code, err := engine.RunCLI(context.WithoutCancel(ctx), gophper.Options{
-		Args:   cmd.Args().Slice(),
-		Env:    os.Environ(),
+		Args:   guestArgs(cmd.Args().Slice()),
+		Env:    guestEnv(os.Environ()),
 		Dir:    gophper.HostToGuest(wd),
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
@@ -470,6 +476,38 @@ func phpAction(ctx context.Context, cmd *cli.Command) (err error) {
 		return cli.Exit("", code)
 	}
 	return nil
+}
+
+// guestArgs writes host paths in the arguments as PHP sees them, so that
+// php C:\app\run.php opens /c/app/run.php. Only on Windows do the two differ.
+func guestArgs(args []string) []string {
+	out := make([]string, len(args))
+	for i, a := range args {
+		switch {
+		case filepath.IsAbs(a):
+			out[i] = gophper.HostToGuest(a)
+		case filepath.Separator != '/' && strings.ContainsRune(a, filepath.Separator) && phpExists(a):
+			// A relative path stays relative, in PHP's separators.
+			out[i] = filepath.ToSlash(a)
+		default:
+			out[i] = a
+		}
+	}
+	return out
+}
+
+func phpExists(path string) bool {
+	_, err := os.Stat(path)
+	return err == nil
+}
+
+// guestEnv sets TMPDIR, which sys_get_temp_dir() reads, if the host has
+// none. PHP falls back to /tmp, which Windows has no drive for.
+func guestEnv(env []string) []string {
+	if slices.ContainsFunc(env, func(kv string) bool { return strings.HasPrefix(kv, "TMPDIR=") }) {
+		return env
+	}
+	return append(env, "TMPDIR="+gophper.HostToGuest(os.TempDir()))
 }
 
 func serveAction(ctx context.Context, cmd *cli.Command) (err error) {
