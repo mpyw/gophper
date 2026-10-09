@@ -307,8 +307,6 @@ func TestProcessResolve(t *testing.T) {
 		env    []string
 		want   string // "" for not found
 	}{
-		{"absolute", "/bin/sh", true, nil, "/bin/sh"},
-		{"relative with a slash", "bin/prog", true, nil, filepath.Join(cwd, "bin/prog")},
 		{"relative without search", "prog", false, nil, filepath.Join(cwd, "prog")},
 		{"relative PATH entry", "prog", true, []string{"PATH=bin"}, filepath.Join(cwd, "bin/prog")},
 		{"empty PATH entry is the cwd", "here", true, []string{"PATH=/nonexistent:"}, filepath.Join(cwd, "here")},

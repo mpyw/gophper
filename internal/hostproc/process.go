@@ -143,9 +143,11 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 
 	cmd, ok := processShell(path, argv)
 	if !ok {
+		var name string
 		if strings.Contains(path, "/") {
 			// A path, not a name to look up: PHP's, which is the host's
-			// only on Unix. On Windows, /c/app/x.exe is C:\app\x.exe.
+			// only on Unix. On Windows, /c/app/x.exe is C:\app\x.exe,
+			// which has no slash to tell it from a name.
 			if !strings.HasPrefix(path, "/") {
 				path = pathpkg.Join(guestCwd, path)
 			}
@@ -153,11 +155,12 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 			if !ok {
 				return wasi.ENOENT
 			}
-			path = host
-		}
-		name, err := processResolve(path, search != 0, cwd, env)
-		if err != nil {
-			return errnoFrom(err)
+			name = host
+		} else {
+			var err error
+			if name, err = processResolve(path, search != 0, cwd, env); err != nil {
+				return errnoFrom(err)
+			}
 		}
 		cmd = &exec.Cmd{Path: name, Args: argv}
 		if len(cmd.Args) == 0 {
@@ -346,13 +349,11 @@ func processWithBinDir(env []string, dir string) []string {
 	return append(env, "PATH="+dir+sep+"/usr/local/bin:/usr/bin:/bin")
 }
 
-// processResolve finds the program, as execve or execvp would.
-func processResolve(path string, search bool, cwd string, env []string) (string, error) {
-	if strings.Contains(path, "/") || !search {
-		if !filepath.IsAbs(path) {
-			path = filepath.Join(cwd, path)
-		}
-		return path, nil
+// processResolve finds a program by a name with no slash, as execvp
+// would, or in cwd as execve would. spawn maps a path itself.
+func processResolve(name string, search bool, cwd string, env []string) (string, error) {
+	if !search {
+		return filepath.Join(cwd, name), nil
 	}
 	dirs := os.Getenv("PATH")
 	for _, kv := range env {
@@ -367,9 +368,9 @@ func processResolve(path string, search bool, cwd string, env []string) (string,
 		if !filepath.IsAbs(dir) {
 			dir = filepath.Join(cwd, dir)
 		}
-		name := filepath.Join(dir, path)
-		if st, err := os.Stat(name); err == nil && st.Mode().IsRegular() && st.Mode()&0o111 != 0 {
-			return name, nil
+		path := filepath.Join(dir, name)
+		if st, err := os.Stat(path); err == nil && st.Mode().IsRegular() && st.Mode()&0o111 != 0 {
+			return path, nil
 		}
 	}
 	return "", fs.ErrNotExist
