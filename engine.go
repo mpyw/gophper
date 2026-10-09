@@ -194,6 +194,7 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 	e.runs.Add(1)
 	e.mu.Unlock()
 	defer e.runs.Done()
+	opts.Stdin = engineSharedStdin(opts.Stdin)
 
 	mod, err := compiled()
 	if err != nil {

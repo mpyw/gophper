@@ -77,8 +77,8 @@ type Processes struct {
 
 // NewProcesses returns an empty table for one PHP instance. Unless allowed,
 // every spawn fails with EPERM. stdin, stdout and stderr are the instance's
-// own. A child given one of them gets it until Close, even when it outlives
-// the instance.
+// own. A child given one that is a file shares it, as a real fd. Any other
+// it gets until Close, even when it outlives the instance.
 //
 // binDir, if not empty, goes first in a child's PATH. It holds the
 // command "php", so that a script started with "#!/usr/bin/env php" runs on
@@ -99,9 +99,9 @@ func NewProcesses(run wasi.Run, sockets *hostnet.Sockets, allowed bool, hostPath
 }
 
 // Close detaches the children from the instance. They keep running, as
-// children of an exited PHP would, and are reaped when they exit. From now
-// on they read EOF from the instance's stdin, and their writes to its
-// stdout and stderr are dropped.
+// children of an exited PHP would, and are reaped when they exit. A stdio
+// stream that is a file stays theirs, as a real fd would. From any other,
+// they now read EOF, and their writes are dropped.
 func (p *Processes) Close() {
 	p.stdin.close()
 	p.stdout.close()

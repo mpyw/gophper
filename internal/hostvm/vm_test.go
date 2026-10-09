@@ -133,10 +133,17 @@ func TestVMFire(t *testing.T) {
 func TestVMNanosleep(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	v := NewVM(ctx, cancel)
-	// A pending signal returns at once.
+	v.Allocate(8, 8)
+	v.memory.Reallocate(8)
+	v.vmInterrupt = 1
+	// A pending signal returns at once, with the flag raised: Deliver may
+	// not have raised it yet, and the guest checks right after.
 	v.Pending = func() bool { return true }
 	start := time.Now()
 	v.Nanosleep(int64(time.Hour))
+	if v.memory.buf[1] != 1 {
+		t.Error("returned for a signal with no interrupt flag raised")
+	}
 	v.Pending = nil
 	// So does the end of the run.
 	v.Cancel()

@@ -5,10 +5,15 @@
 package hostproc
 
 import (
+	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
+
+	"github.com/mpyw/gophper/internal/wasi"
 )
 
 // TestProcessPathWindows reads Windows' Path key, keeps its spelling, and
@@ -71,5 +76,71 @@ func TestProcessBatchSafe(t *testing.T) {
 		if got := processBatchSafe(tt.name, tt.args); got != tt.want {
 			t.Errorf("processBatchSafe(%q, %q) = %v, want %v", tt.name, tt.args, got, tt.want)
 		}
+	}
+}
+
+// TestProcessSpawnWindows refuses what Windows would run otherwise than
+// checked, and a path on no drive.
+func TestProcessSpawnWindows(t *testing.T) {
+	dir := t.TempDir()
+	bat := filepath.Join(dir, "run.bat")
+	if err := os.WriteFile(bat, []byte("@echo off\r\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	run := processTestRun{ctx: context.Background(), intr: make(chan struct{})}
+	cwd := processTestGuest(dir)
+	for _, tt := range []struct {
+		name string
+		call processSpawnCall
+		want int32
+	}{
+		{"a batch file with &", processSpawnCall{path: processTestGuest(filepath.Join(dir, "run")), argv: []string{"run", "x & calc"}, cwd: cwd}, wasi.EINVAL},
+		{"no such program", processSpawnCall{path: processTestGuest(filepath.Join(dir, "missing")), argv: []string{"missing"}, cwd: cwd}, wasi.ENOENT},
+		{"no drive", processSpawnCall{path: "/nodrive", argv: []string{"x"}, cwd: cwd}, wasi.ENOENT},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			p := NewProcesses(run, nil, true, func(g string) (string, bool, bool) {
+				if g == "/nodrive" {
+					return "", false, false
+				}
+				return processTestHost(g)
+			}, "", nil, nil, nil)
+			if got, _ := spawnProcess(t, p, newProcessMemory(t), tt.call); got != tt.want {
+				t.Errorf("errno %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+// TestProcessShellWindows runs a command line with a sh.exe from PATH, or
+// with cmd.exe when there is none.
+func TestProcessShellWindows(t *testing.T) {
+	if _, ok := processShell("/bin/ls", []string{"ls"}); ok {
+		t.Error("not a shell command, but taken for one")
+	}
+	if sh, err := exec.LookPath("sh.exe"); err == nil {
+		cmd, ok := processShell("/bin/sh", []string{"sh", "-c", "echo hi"})
+		if !ok || cmd.Path != sh {
+			t.Errorf("with sh.exe: %v, %v", cmd, ok)
+		}
+	}
+	t.Setenv("PATH", "")
+	t.Setenv("ComSpec", "")
+	cmd, ok := processShell("/bin/sh", []string{"sh", "-c", "echo hi"})
+	if !ok || !strings.EqualFold(filepath.Base(cmd.Path), "cmd.exe") || !strings.Contains(cmd.SysProcAttr.CmdLine, `/s /c "echo hi"`) {
+		t.Errorf("without sh: %+v, %v", cmd, ok)
+	}
+}
+
+// TestProcessPathExtDefault uses Windows' own list when PATHEXT is empty.
+func TestProcessPathExtDefault(t *testing.T) {
+	dir := t.TempDir()
+	prog := filepath.Join(dir, "prog.exe")
+	if err := os.WriteFile(prog, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATHEXT", "")
+	if got, ok := processExecutable(filepath.Join(dir, "prog")); !ok || !strings.EqualFold(got, prog) {
+		t.Errorf("%q, %v", got, ok)
 	}
 }

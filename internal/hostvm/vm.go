@@ -193,7 +193,11 @@ func (v *VM) Nanosleep(ns int64) {
 	intr := v.Interruption()
 	// A signal that arrived just before is not in intr. The guest takes it
 	// at its next interrupt check, so sleeping now would delay its handler.
+	// Deliver marks it pending before it raises the flag, so the flag is
+	// raised here too: the check right after this call must not miss it,
+	// as a script that ends there never checks again.
 	if v.Pending != nil && v.Pending() {
+		v.memory.writeByte(v.vmInterrupt, 1)
 		return
 	}
 	t := time.NewTimer(time.Duration(ns))

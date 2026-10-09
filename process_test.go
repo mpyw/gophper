@@ -349,3 +349,44 @@ func TestProcessFileStdin(t *testing.T) {
 		t.Errorf("%q, %v", out.String(), err)
 	}
 }
+
+// TestProcessSharedStdin reads a stdin that is no file from PHP while a
+// child's pipe is fed from it too. Run with -race: both read the reader.
+func TestProcessSharedStdin(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	_, err = newTestEngine(t).RunCLI(context.Background(), gophper.Options{
+		Args: []string{"-r", fmt.Sprintf(`
+			$p = proc_open([%q, "-test.run=^$"], [1 => ["pipe", "w"], 2 => ["pipe", "w"]], $pipes);
+			$n = strlen(stream_get_contents(STDIN));
+			stream_get_contents($pipes[1]);
+			proc_close($p);
+			echo $n > 0 ? "read" : "nothing";`, gophper.HostToGuest(exe))},
+		Stdin:     strings.NewReader(strings.Repeat("x", 1<<20)),
+		Stdout:    &out,
+		Stderr:    &out,
+		Dir:       gophper.HostToGuest(wd),
+		FS:        gophper.HostFS(),
+		HostPath:  gophper.HostPaths,
+		Processes: true,
+	})
+	if err != nil || out.String() != "read" {
+		t.Errorf("%q, %v", out.String(), err)
+	}
+}
+
+// TestProcessShellCommand runs a command line, as exec() does, on every
+// OS: with /bin/sh on Unix, and with a sh.exe or cmd.exe on Windows.
+func TestProcessShellCommand(t *testing.T) {
+	out, code := runPHP(t, `echo trim(shell_exec("echo hi")), " ", exec("exit 3", $o, $status), $status;`)
+	if code != 0 || out != "hi 3" {
+		t.Errorf("exit %d: %q", code, out)
+	}
+}

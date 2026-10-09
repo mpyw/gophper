@@ -22,8 +22,9 @@ func processShell(path string, argv []string) (*exec.Cmd, bool) {
 	if path != "/bin/sh" || len(argv) != 3 || argv[1] != "-c" {
 		return nil, false
 	}
-	// A program: a sh.bat would hand the line to cmd.exe unchecked.
-	if sh, err := exec.LookPath("sh"); err == nil && strings.EqualFold(filepath.Ext(sh), ".exe") {
+	// A program: a sh.bat would hand the line to cmd.exe unchecked. By its
+	// full name, so that a sh.cmd earlier in PATH hides no sh.exe after it.
+	if sh, err := exec.LookPath("sh.exe"); err == nil && strings.EqualFold(filepath.Ext(sh), ".exe") {
 		return &exec.Cmd{Path: sh, Args: []string{"sh", "-c", argv[2]}}, true
 	}
 	comspec := os.Getenv("ComSpec")
