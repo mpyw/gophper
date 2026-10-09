@@ -128,37 +128,31 @@ func (s *Signals) Deliver(sig int32) {
 	s.fresh = true
 	close(s.changed)
 	s.changed = make(chan struct{})
-	fatal := s.handled&bit == 0
+	// The grace starts before the guest can see the signal: once woken, it
+	// may take it at once, and a timer started after that would not stop.
+	if s.handled&bit == 0 && !s.stopped && s.grace[sig] == nil {
+		var t *time.Timer
+		t = time.AfterFunc(signalGrace, func() {
+			s.mu.Lock()
+			// Taken in the meantime: take stopped it too late.
+			if s.grace[sig] != t {
+				s.mu.Unlock()
+				return
+			}
+			delete(s.grace, sig)
+			if s.terminated == 0 {
+				s.terminated = sig
+			}
+			s.mu.Unlock()
+			s.run.Cancel()
+		})
+		if s.grace == nil {
+			s.grace = map[int32]*time.Timer{}
+		}
+		s.grace[sig] = t
+	}
 	s.mu.Unlock()
 	s.run.Wake()
-	if !fatal {
-		return
-	}
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.stopped || s.grace[sig] != nil {
-		// Over, or the grace for this signal runs already.
-		return
-	}
-	var t *time.Timer
-	t = time.AfterFunc(signalGrace, func() {
-		s.mu.Lock()
-		// Taken in the meantime: sig_take stopped it too late.
-		if s.grace[sig] != t {
-			s.mu.Unlock()
-			return
-		}
-		delete(s.grace, sig)
-		if s.terminated == 0 {
-			s.terminated = sig
-		}
-		s.mu.Unlock()
-		s.run.Cancel()
-	})
-	if s.grace == nil {
-		s.grace = map[int32]*time.Timer{}
-	}
-	s.grace[sig] = t
 }
 
 // Stop cancels the alarm and the grace timers, at the end of the run.

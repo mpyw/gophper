@@ -16,6 +16,8 @@ type testRun struct {
 	intr     chan struct{}
 	woken    atomic.Int32
 	canceled atomic.Bool
+	// onWake runs in Wake, as a guest that takes the signal at once.
+	onWake func()
 }
 
 func newTestRun(ctx context.Context) *testRun {
@@ -24,8 +26,13 @@ func newTestRun(ctx context.Context) *testRun {
 
 func (r *testRun) Context() context.Context      { return r.ctx }
 func (r *testRun) Interruption() <-chan struct{} { return r.intr }
-func (r *testRun) Wake()                         { r.woken.Add(1) }
-func (r *testRun) Cancel()                       { r.canceled.Store(true) }
+func (r *testRun) Wake() {
+	r.woken.Add(1)
+	if r.onWake != nil {
+		r.onWake()
+	}
+}
+func (r *testRun) Cancel() { r.canceled.Store(true) }
 
 // TestSignalsStop cancels the timers a run left, so none fires on a later run.
 func TestSignalsStop(t *testing.T) {
@@ -224,5 +231,22 @@ func TestSignalsTakenNotFatal(t *testing.T) {
 	}
 	if s.Terminated() != 12 {
 		t.Errorf("terminated %d, want 12", s.Terminated())
+	}
+}
+
+// TestSignalsTakenAtWake takes a fatal signal as soon as the guest is
+// woken, before Deliver returns. Its grace was already running, so taking
+// it stops it.
+func TestSignalsTakenAtWake(t *testing.T) {
+	signalGrace = 20 * time.Millisecond
+	defer func() { signalGrace = 5 * time.Second }()
+	run := newTestRun(context.Background())
+	s := NewSignals(run)
+	defer s.Stop()
+	run.onWake = func() { s.take() }
+	s.Deliver(10)
+	time.Sleep(10 * signalGrace)
+	if run.canceled.Load() || s.Terminated() != 0 {
+		t.Errorf("canceled %v, terminated %d", run.canceled.Load(), s.Terminated())
 	}
 }

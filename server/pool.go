@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -145,13 +146,6 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 	if cfg.MemoryLimit < 0 {
 		return nil, fmt.Errorf("memory limit %d is negative", cfg.MemoryLimit)
 	}
-	if cfg.MemoryLimit > 0 {
-		// Each instance would fail to start, request by request. php-cgi -v
-		// tells now, with the cap it would run under.
-		if _, err := engine.RunCGI(context.Background(), gophper.Options{Args: []string{"-v"}, Stdout: io.Discard, Stderr: io.Discard, MemoryLimit: cfg.MemoryLimit}); err != nil {
-			return nil, fmt.Errorf("memory limit: %w", err)
-		}
-	}
 	for _, m := range cfg.Mounts {
 		if !filepath.IsAbs(m.Dir) {
 			return nil, fmt.Errorf("mount %q: not an absolute path", m.Dir)
@@ -261,7 +255,30 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 		}
 		p.workers = &poolWorkers{dir: dir, maxRequests: maxRequests, all: map[*poolWorker]struct{}{}}
 	}
+	if cfg.MemoryLimit > 0 {
+		if err := p.checkMemoryLimit(); err != nil {
+			return nil, errors.Join(err, p.close())
+		}
+	}
 	return p, nil
+}
+
+// checkMemoryLimit starts php-cgi -v as each instance starts: its php.ini
+// and mounts, under the cap. Opcache's shared memory, 64 MB for a worker,
+// may not fit, and then every request would fail.
+func (p *pool) checkMemoryLimit() error {
+	var out bytes.Buffer
+	code, err := p.engine.RunCGI(context.Background(), gophper.Options{
+		Args: []string{"-v"}, Env: p.env, Stdout: &out, Stderr: &out,
+		FS: p.fs, HostPath: p.hostPath, MemoryLimit: p.memoryLimit,
+	})
+	switch {
+	case err != nil:
+		return fmt.Errorf("memory limit %d: %w", p.memoryLimit, err)
+	case code != 0:
+		return fmt.Errorf("memory limit %d: PHP cannot start under it: %s", p.memoryLimit, strings.TrimSpace(out.String()))
+	}
+	return nil
 }
 
 // mounted reports whether a host path is inside one of the mounts.

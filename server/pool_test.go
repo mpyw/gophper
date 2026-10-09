@@ -312,10 +312,15 @@ func TestPoolConfigErrors(t *testing.T) {
 			t.Errorf("no user cache directory: %v", err)
 		}
 	}
-	// A memory cap PHP cannot start under, or less than nothing.
-	for _, limit := range []int64{1 << 20, -1} {
+	// A memory cap PHP cannot start under, or less than nothing. 64 MiB
+	// starts PHP alone, but not with a worker's 64 MB of opcache.
+	for _, tt := range []struct {
+		limit     int64
+		noOpcache bool
+	}{{1 << 20, true}, {-1, true}, {64 << 20, false}} {
 		capped := cfg
-		capped.NoOpcache, capped.MemoryLimit = true, limit
+		capped.OpcacheDir, capped.NoOpcache, capped.MemoryLimit = t.TempDir(), tt.noOpcache, tt.limit
+		limit := tt.limit
 		if p, err := newPool(engine, capped, nil); err == nil || !strings.Contains(err.Error(), "memory limit") {
 			if p != nil {
 				_ = p.close()
