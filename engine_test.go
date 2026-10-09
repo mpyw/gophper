@@ -446,3 +446,30 @@ func TestEngineMemoryLimit(t *testing.T) {
 		}
 	}
 }
+
+// TestEngineCompile compiles both binaries ahead of the first run. A done
+// ctx returns at once, and the compile goes on. After Close, it refuses.
+func TestEngineCompile(t *testing.T) {
+	e, err := gophper.NewEngine(context.Background(), gophper.DefaultEngineConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	// Even from the cache, compiling 16 MB of wasm takes a while.
+	if err := e.Compile(canceled); !errors.Is(err, context.Canceled) {
+		t.Errorf("a done ctx: %v", err)
+	}
+	if err := e.Compile(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if got := runEngineCLI(t, e, `echo 1;`); got != "1" {
+		t.Errorf("after Compile: %q", got)
+	}
+	if err := e.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.Compile(context.Background()); !errors.Is(err, gophper.ErrEngineClosed) {
+		t.Errorf("after Close: %v", err)
+	}
+}

@@ -265,7 +265,8 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 // mounts, under its memory cap. Opcache's shared memory, 64 MB for a
 // worker, may not fit the cap, and then every request would fail. It also
 // compiles php-cgi.wasm, which on a cold cache took most of a worker's
-// time to listen.
+// time to listen. Engine.Compile would compile php.wasm too, which the
+// server never runs.
 func (p *pool) checkStart() error {
 	var out bytes.Buffer
 	code, err := p.engine.RunCGI(context.Background(), gophper.Options{

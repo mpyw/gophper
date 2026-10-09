@@ -56,7 +56,8 @@ type Engine struct {
 // ErrEngineClosed is returned by a run that starts after Close.
 var ErrEngineClosed = errors.New("gophper: the engine is closed")
 
-// NewEngine prepares the runtime. The PHP binaries are compiled on first use.
+// NewEngine prepares the runtime. The PHP binaries are compiled on first
+// use, or by Compile.
 func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 	if phpwasm.ABIVersion != engineABIVersion {
 		return nil, fmt.Errorf("github.com/mpyw/gophper-wasm has ABI version %d, but this gophper implements %d; use matching versions", phpwasm.ABIVersion, engineABIVersion)
@@ -170,6 +171,34 @@ func (e *Engine) Close(ctx context.Context) error {
 		err = errors.Join(err, e.cache.Close(ctx))
 	}
 	return err
+}
+
+// Compile compiles the PHP binaries now: php.wasm for RunCLI, and
+// php-cgi.wasm for RunCGI. Otherwise each is compiled on its first run,
+// which then takes seconds with an empty CacheDir. When ctx is done first,
+// Compile returns its error, and the compile goes on for the next run.
+func (e *Engine) Compile(ctx context.Context) error {
+	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return ErrEngineClosed
+	}
+	// Close waits for it, as for a run: the runtime must outlive it.
+	e.runs.Add(1)
+	e.mu.Unlock()
+	done := make(chan error, 1)
+	go func() {
+		defer e.runs.Done()
+		_, cliErr := e.cliModule()
+		_, cgiErr := e.cgiModule()
+		done <- errors.Join(cliErr, cgiErr)
+	}()
+	select {
+	case err := <-done:
+		return err
+	case <-ctx.Done():
+		return ctx.Err()
+	}
 }
 
 // RunCLI runs the PHP CLI SAPI and returns its exit code.

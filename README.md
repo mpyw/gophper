@@ -93,6 +93,7 @@ PHP gets nothing of the host unless `Options` says so:
 | `Signals` | Signals for PHP, as from `signal.Notify`. Handled ones run the `pcntl` handler. The rest end the run with exit code 128 plus the signal number. | No signals |
 
 `DefaultEngineConfig` keeps a per-user cache directory: wazero's compiled code, and the PHP binaries decompressed.
+Each binary is compiled on its first run. `Engine.Compile` does it ahead, so that the first request does not wait.
 With the cache, `gophper php -r 'echo 1;'` takes about 0.18 seconds.
 Most of it is wazero validating the 16 MB binary, which it does even with the cache.
 
