@@ -86,6 +86,11 @@ const poolMaxRequests = 500
 // poolOpcacheDir is where OpcacheDir is mounted.
 const poolOpcacheDir = "/var/cache/gophper/opcache"
 
+// poolWorkersDir is where a worker sees the directory of the workers'
+// sockets. A host path would not do: on Linux the sockets are under /tmp,
+// which inside PHP is TempDir.
+const poolWorkersDir = "/var/run/gophper/workers"
+
 // poolOpcacheINI turns on opcache with its file cache.
 var poolOpcacheINI = []string{
 	"opcache.enable=1",
@@ -297,6 +302,10 @@ func (p *pool) hostPath(path string) (string, bool, bool) {
 	if rel, ok := strings.CutPrefix(path, poolOpcacheDir); ok && p.opcacheDir != "" && (rel == "" || rel[0] == '/') {
 		return filepath.Join(p.opcacheDir, rel), true, true
 	}
+	if rel, ok := strings.CutPrefix(path, poolWorkersDir); ok && p.workers != nil && (rel == "" || rel[0] == '/') {
+		// A worker binds its FastCGI socket here.
+		return filepath.Join(p.workers.dir, filepath.FromSlash(rel)), true, true
+	}
 	host, ok := hostpath.Host(path)
 	if !ok {
 		return "", false, false
@@ -306,10 +315,6 @@ func (p *pool) hostPath(path string) (string, bool, bool) {
 		if m.contains(host) {
 			return host, !m.ReadOnly, true
 		}
-	}
-	// A worker binds its FastCGI socket here, outside every mount.
-	if p.workers != nil && (Mount{Dir: p.workers.dir}).contains(host) {
-		return host, true, true
 	}
 	return "", false, false
 }

@@ -18,6 +18,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 )
 
 // Record types.
@@ -209,6 +210,7 @@ func (c *serverConn) serve(ctx context.Context, h Handler) {
 				keep := cur.keepConn
 				cur = nil
 				if !keep {
+					c.drain()
 					return
 				}
 			default:
@@ -234,6 +236,7 @@ func (c *serverConn) serve(ctx context.Context, h Handler) {
 				keep := cur.keepConn
 				cur = nil
 				if !keep {
+					c.drain()
 					return
 				}
 			default:
@@ -336,11 +339,36 @@ func (c *serverConn) handle(ctx context.Context, h Handler, a *activeRequest, re
 		// No FCGI_END_REQUEST was sent, so no next request can race the reader.
 		close(a.done)
 	}
-	if err != nil || !a.keepConn {
+	switch {
+	case err != nil:
 		// Wake the reader loop, which may be blocked waiting for a record.
 		// serve closes conn again; the second error means nothing.
 		_ = c.conn.Close()
+	case !a.keepConn:
+		c.lingerClose()
 	}
+}
+
+// serverLinger is how long a connection without keep-alive waits for the
+// web server to close it, after the response.
+const serverLinger = 5 * time.Second
+
+// lingerClose ends the response with a FIN, and leaves the rest to the
+// reader loop, which drains the connection until the web server closes it.
+// Closing at once, with records still unread, such as FCGI_STDIN's last,
+// would send a RST, and the web server could lose the end of the response.
+func (c *serverConn) lingerClose() {
+	cw, ok := c.conn.(interface{ CloseWrite() error })
+	if !ok || cw.CloseWrite() != nil || c.conn.SetReadDeadline(time.Now().Add(serverLinger)) != nil {
+		// No half-close here: closing is all that is left.
+		_ = c.conn.Close()
+	}
+}
+
+// drain reads and drops what the web server still sends, until it closes
+// the connection or lingerClose's deadline passes.
+func (c *serverConn) drain() {
+	_, _ = io.Copy(io.Discard, c.r) // ends with the connection; its error is the expected one
 }
 
 // streamWriter frames writes into FCGI_STDOUT or FCGI_STDERR records.

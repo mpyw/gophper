@@ -9,6 +9,7 @@ import (
 	"io"
 	"net"
 	"os"
+	"path"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -17,7 +18,6 @@ import (
 
 	"github.com/mpyw/gophper"
 	"github.com/mpyw/gophper/internal/fcgi"
-	"github.com/mpyw/gophper/internal/hostpath"
 )
 
 // Workers: each is one php-cgi in FastCGI mode, as a php-fpm child is. It
@@ -132,7 +132,7 @@ func (p *pool) poolStart(sock string) (*poolWorker, error) {
 		defer p.workers.running.Done()
 		defer close(w.done)
 		_, err := p.engine.RunCGI(ctx, gophper.Options{
-			Args: []string{"-b", hostpath.Guest(sock)}, Env: env, Stdout: p.errorLog, Stderr: p.errorLog, FS: p.fs,
+			Args: []string{"-b", path.Join(poolWorkersDir, filepath.Base(sock))}, Env: env, Stdout: p.errorLog, Stderr: p.errorLog, FS: p.fs,
 			HostPath: p.hostPath, Processes: p.processes,
 		})
 		if err != nil && ctx.Err() == nil {
