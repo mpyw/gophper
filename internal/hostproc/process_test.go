@@ -131,6 +131,8 @@ func TestProcessSpawnRejects(t *testing.T) {
 		{"processes off", false, sh, wasi.EPERM},
 		{"cwd without a host directory", true, processSpawnCall{path: "/bin/sh", cwd: "/unmapped"}, wasi.ENOENT},
 		{"program not found", true, processSpawnCall{path: "/no/such/program", cwd: dir}, wasi.ENOENT},
+		{"program without a host file", true, processSpawnCall{path: "/unmapped/prog", cwd: dir}, wasi.ENOENT},
+		{"relative program without a host file", true, processSpawnCall{path: "../unmapped/prog", cwd: "/"}, wasi.ENOENT},
 		{"unknown fd kind", true, with(processSpawnFD{fd: 1, kind: 99}), wasi.EINVAL},
 		{"unknown stdio", true, with(processSpawnFD{fd: 1, kind: processChildStdio, value: 7}), wasi.EBADF},
 		{"stdio above stderr", true, with(processSpawnFD{fd: 3, kind: processChildStdio, value: 1}), wasi.EBADF},

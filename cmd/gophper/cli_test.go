@@ -337,6 +337,40 @@ func TestCLIPHPBinary(t *testing.T) {
 	}
 }
 
+// TestCLIAsPHPWithOptions runs gophper by the name php, with gophper.args
+// beside it, as phpBinaryScript leaves it on Windows. The options in the
+// file come before the php subcommand.
+func TestCLIAsPHPWithOptions(t *testing.T) {
+	dir := t.TempDir()
+	name := "php"
+	if runtime.GOOS == "windows" {
+		name = "php.exe"
+	}
+	php := filepath.Join(dir, name)
+	b, err := os.ReadFile(cliBinary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(php, b, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	ext := t.TempDir()
+	if _, errOut, code := cliRun(t, t.TempDir(), "", "--extension-dir", ext, "extension", "install", "dl_test"); code != 0 {
+		t.Fatalf("install: exit %d: %s", code, errOut)
+	}
+	// CRLF and a blank line, as an editor on Windows may leave them.
+	cliWrite(t, filepath.Join(dir, "gophper.args"), "--cache-dir\r\n"+cliCacheDir+"\r\n\r\n--extension-dir\r\n"+ext+"\r\n")
+	cmd := exec.Command(php, "-d", "extension=dl_test", "-r", `echo extension_loaded("dl_test") ? "loaded" : "missing";`)
+	cmd.Env = cmd.Environ()
+	if cliCoverDir != "" {
+		cmd.Env = append(cmd.Env, "GOCOVERDIR="+cliCoverDir)
+	}
+	out, err := cmd.CombinedOutput()
+	if err != nil || string(out) != "loaded" {
+		t.Errorf("%v: %q", err, out)
+	}
+}
+
 func TestCLIExtensions(t *testing.T) {
 	dir := t.TempDir()
 	out, _, code := cliRun(t, dir, "", "extension", "list")

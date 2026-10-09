@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -120,6 +121,37 @@ func TestPHPBinaryExe(t *testing.T) {
 	}
 	if b, err := os.ReadFile(copied); err != nil || string(b) != "binary" {
 		t.Errorf("copy %q, %v", b, err)
+	}
+	// A link that cannot be made, as across volumes: a copy instead. The
+	// temporary name taken already stands in for the failure.
+	other := []string{"--other"}
+	blockDir := t.TempDir()
+	if _, err := phpBinaryExe(blockDir, exe, other); err != nil {
+		t.Fatal(err)
+	}
+	blocked, err := os.ReadDir(filepath.Join(blockDir, "bin"))
+	if err != nil || len(blocked) != 1 {
+		t.Fatalf("%v, %v", blocked, err)
+	}
+	made := filepath.Join(blockDir, "bin", blocked[0].Name())
+	if err := os.Remove(filepath.Join(made, "php.exe")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(made, ".php-"+strconv.Itoa(os.Getpid())+".exe"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if path, err := phpBinaryExe(blockDir, exe, other); err != nil {
+		t.Errorf("copy: %v", err)
+	} else if b, err := os.ReadFile(path); err != nil || string(b) != "binary" {
+		t.Errorf("copied %q, %v", b, err)
+	}
+	// A file where the directory would go.
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := phpBinaryExe(file, exe, nil); err == nil {
+		t.Error("a file as the directory was accepted")
 	}
 	if _, err := phpBinaryExe(base, filepath.Join(t.TempDir(), "missing"), nil); err == nil {
 		t.Error("a missing gophper was accepted")
