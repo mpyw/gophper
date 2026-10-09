@@ -8,6 +8,7 @@ import (
 	"os"
 	"sync"
 
+	"github.com/mpyw/gophper/internal/wasi"
 	"github.com/tetratelabs/wazero"
 )
 
@@ -33,21 +34,14 @@ type SystemHostPath func(path string) (host string, writable, ok bool)
 
 // System is the state of one PHP instance: the files it holds locks on.
 type System struct {
-	run      SystemRun
+	run      wasi.Run
 	hostPath SystemHostPath
 	mu       sync.Mutex
 	locks    map[int32]*os.File
 }
 
-// SystemRun is what the host functions need from the PHP instance calling them.
-// hostnet.Run satisfies it.
-type SystemRun interface {
-	Context() context.Context
-	Interruption() <-chan struct{}
-}
-
 // NewSystem returns the state for one PHP instance.
-func NewSystem(run SystemRun, hostPath SystemHostPath) *System {
+func NewSystem(run wasi.Run, hostPath SystemHostPath) *System {
 	return &System{run: run, hostPath: hostPath, locks: map[int32]*os.File{}}
 }
 

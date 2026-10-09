@@ -22,6 +22,7 @@ import (
 	"github.com/mpyw/gophper/internal/hostnet"
 	"github.com/mpyw/gophper/internal/hostproc"
 	"github.com/mpyw/gophper/internal/hostsys"
+	"github.com/mpyw/gophper/internal/wasi"
 )
 
 // engineABIVersion is the phpwasm.ABIVersion this host implements.
@@ -100,7 +101,7 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 		}
 		return nil
 	})
-	hostnet.ExportDNS(host, func(ctx context.Context) hostnet.Run {
+	hostnet.ExportDNS(host, func(ctx context.Context) wasi.Run {
 		if inst := engineInstanceFrom(ctx); inst != nil {
 			return inst
 		}

@@ -52,6 +52,7 @@ linters:
             - github.com/mpyw/gophper/internal/hostproc$
             - github.com/mpyw/gophper/internal/hostsys$
             - github.com/mpyw/gophper/internal/hostfn$
+            - github.com/mpyw/gophper/internal/wasi$
 
         # Package server: HTTP and FastCGI on top of the Engine's public API.
         server:
@@ -89,6 +90,14 @@ linters:
           allow:
             - $gostd
 
+        # The errno values and the Run every host package shares.
+        wasi:
+          list-mode: strict
+          files:
+            - "**/internal/wasi/*.go"
+          allow:
+            - $gostd
+
         # Sockets and DNS for the guest: the standard library and wazero only.
         hostnet:
           list-mode: strict
@@ -97,6 +106,7 @@ linters:
           allow:
             - $gostd
             - github.com/tetratelabs/wazero
+            - github.com/mpyw/gophper/internal/wasi$
 
         # Child processes for the guest. Pipes and sockets come from hostnet.
         hostproc:
@@ -107,6 +117,7 @@ linters:
             - $gostd
             - github.com/tetratelabs/wazero
             - github.com/mpyw/gophper/internal/hostnet$
+            - github.com/mpyw/gophper/internal/wasi$
 
         # PHP functions written in Go.
         hostfn:
@@ -125,6 +136,7 @@ linters:
           allow:
             - $gostd
             - github.com/tetratelabs/wazero
+            - github.com/mpyw/gophper/internal/wasi$
 
         dylink:
           list-mode: strict
@@ -155,4 +167,5 @@ linters:
             - github.com/mpyw/gophper$
             - github.com/mpyw/gophper/internal/fcgi$
             - github.com/mpyw/gophper/server$
+            - github.com/mpyw/gophper/internal/wasi$
             - github.com/mpyw/gophper-wasm/ext$

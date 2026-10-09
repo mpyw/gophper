@@ -6,6 +6,7 @@ import (
 	"net"
 	"strings"
 
+	"github.com/mpyw/gophper/internal/wasi"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 )
@@ -13,7 +14,7 @@ import (
 // ExportDNS adds the resolver host functions, used by getaddrinfo(3) and
 // friends in gophper-wasm's compat/gophper_net.c. from returns the instance a call
 // comes from, so a lookup stops at its interrupts.
-func ExportDNS(b wazero.HostModuleBuilder, from func(context.Context) Run) {
+func ExportDNS(b wazero.HostModuleBuilder, from func(context.Context) wasi.Run) {
 	x := dnsExports{from: from}
 	b.NewFunctionBuilder().WithFunc(x.lookup).Export("dns_lookup")
 	b.NewFunctionBuilder().WithFunc(x.reverse).Export("dns_reverse")
@@ -21,7 +22,7 @@ func ExportDNS(b wazero.HostModuleBuilder, from func(context.Context) Run) {
 }
 
 type dnsExports struct {
-	from func(context.Context) Run
+	from func(context.Context) wasi.Run
 }
 
 // lookup writes name's addresses as lines of text. family is 4, 6 or 0

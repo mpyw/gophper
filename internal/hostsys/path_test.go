@@ -15,6 +15,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mpyw/gophper/internal/wasi"
 	"github.com/tetratelabs/wazero/api"
 )
 
@@ -22,7 +23,7 @@ import (
 // every host path as itself, except "/unmapped", and paths under readOnly
 // as read-only.
 func newSystemPaths(readOnly string) systemPathExports {
-	s := NewSystem(memoryTestRun{ctx: context.Background()}, func(path string) (string, bool, bool) {
+	s := NewSystem(guestRun{ctx: context.Background()}, func(path string) (string, bool, bool) {
 		if strings.HasPrefix(path, "/unmapped") {
 			return "", false, false
 		}
@@ -51,7 +52,7 @@ func TestSystemPathErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 	x := newSystemPaths(ro)
-	m := newMemoryModule(t)
+	m := newGuest(t)
 	ctx := context.Background()
 	for _, tt := range []struct {
 		name string
@@ -59,20 +60,20 @@ func TestSystemPathErrors(t *testing.T) {
 		path string
 		want int32
 	}{
-		{"stat unmapped", func(p, n uint32) int32 { return x.stat(ctx, m, p, n, 1, 512) }, "/unmapped", errnoENOENT},
-		{"stat missing", func(p, n uint32) int32 { return x.stat(ctx, m, p, n, 1, 512) }, filepath.Join(dir, "missing"), errnoENOENT},
-		{"access unmapped", func(p, n uint32) int32 { return x.access(ctx, m, p, n, 4) }, "/unmapped", errnoENOENT},
-		{"access to write read-only", func(p, n uint32) int32 { return x.access(ctx, m, p, n, systemAccessWrite) }, ro, errnoEROFS},
+		{"stat unmapped", func(p, n uint32) int32 { return x.stat(ctx, m, p, n, 1, 512) }, "/unmapped", wasi.ENOENT},
+		{"stat missing", func(p, n uint32) int32 { return x.stat(ctx, m, p, n, 1, 512) }, filepath.Join(dir, "missing"), wasi.ENOENT},
+		{"access unmapped", func(p, n uint32) int32 { return x.access(ctx, m, p, n, 4) }, "/unmapped", wasi.ENOENT},
+		{"access to write read-only", func(p, n uint32) int32 { return x.access(ctx, m, p, n, systemAccessWrite) }, ro, wasi.EROFS},
 		{"access to read", func(p, n uint32) int32 { return x.access(ctx, m, p, n, 4) }, file, 0},
-		{"access to execute", func(p, n uint32) int32 { return x.access(ctx, m, p, n, systemAccessExecute) }, file, errnoEACCES},
-		{"chmod unmapped", func(p, n uint32) int32 { return x.chmod(ctx, m, p, n, 0o644) }, "/unmapped", errnoENOENT},
-		{"chmod read-only", func(p, n uint32) int32 { return x.chmod(ctx, m, p, n, 0o644) }, ro, errnoEROFS},
-		{"chmod missing", func(p, n uint32) int32 { return x.chmod(ctx, m, p, n, 0o644) }, filepath.Join(dir, "missing"), errnoENOENT},
-		{"chown unmapped", func(p, n uint32) int32 { return x.chown(ctx, m, p, n, -1, -1, 1) }, "/unmapped", errnoENOENT},
-		{"chown read-only", func(p, n uint32) int32 { return x.chown(ctx, m, p, n, -1, -1, 1) }, ro, errnoEROFS},
+		{"access to execute", func(p, n uint32) int32 { return x.access(ctx, m, p, n, systemAccessExecute) }, file, wasi.EACCES},
+		{"chmod unmapped", func(p, n uint32) int32 { return x.chmod(ctx, m, p, n, 0o644) }, "/unmapped", wasi.ENOENT},
+		{"chmod read-only", func(p, n uint32) int32 { return x.chmod(ctx, m, p, n, 0o644) }, ro, wasi.EROFS},
+		{"chmod missing", func(p, n uint32) int32 { return x.chmod(ctx, m, p, n, 0o644) }, filepath.Join(dir, "missing"), wasi.ENOENT},
+		{"chown unmapped", func(p, n uint32) int32 { return x.chown(ctx, m, p, n, -1, -1, 1) }, "/unmapped", wasi.ENOENT},
+		{"chown read-only", func(p, n uint32) int32 { return x.chown(ctx, m, p, n, -1, -1, 1) }, ro, wasi.EROFS},
 		{"chown keeping both", func(p, n uint32) int32 { return x.chown(ctx, m, p, n, -1, -1, 1) }, file, 0},
 		{"lchown keeping both", func(p, n uint32) int32 { return x.chown(ctx, m, p, n, -1, -1, 0) }, file, 0},
-		{"lchown missing", func(p, n uint32) int32 { return x.chown(ctx, m, p, n, -1, -1, 0) }, filepath.Join(dir, "missing"), errnoENOENT},
+		{"lchown missing", func(p, n uint32) int32 { return x.chown(ctx, m, p, n, -1, -1, 0) }, filepath.Join(dir, "missing"), wasi.ENOENT},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := tt.call(putSystemPath(m, tt.path)); got != tt.want {
@@ -86,7 +87,7 @@ func TestSystemPathErrors(t *testing.T) {
 			t.Skip("root may give files away")
 		}
 		ptr, n := putSystemPath(m, file)
-		if got := x.chown(ctx, m, ptr, n, 0, -1, 1); got != errnoEPERM {
+		if got := x.chown(ctx, m, ptr, n, 0, -1, 1); got != wasi.EPERM {
 			t.Errorf("errno %d, want EPERM", got)
 		}
 	})
@@ -106,7 +107,7 @@ func TestSystemPathStat(t *testing.T) {
 		t.Fatal(err)
 	}
 	x := newSystemPaths("/nothing-read-only")
-	m := newMemoryModule(t)
+	m := newGuest(t)
 	ctx := context.Background()
 	stat := func(path string, follow int32) [3]uint32 {
 		t.Helper()
@@ -184,10 +185,10 @@ func TestSystemErrno(t *testing.T) {
 		want int32
 	}{
 		{nil, 0},
-		{&fs.PathError{Op: "stat", Path: "/x", Err: syscall.ENOENT}, errnoENOENT},
-		{&fs.PathError{Op: "chown", Path: "/x", Err: syscall.EPERM}, errnoEPERM},
-		{&fs.PathError{Op: "open", Path: "/x", Err: syscall.EACCES}, errnoEACCES},
-		{errors.New("something else"), errnoEIO},
+		{&fs.PathError{Op: "stat", Path: "/x", Err: syscall.ENOENT}, wasi.ENOENT},
+		{&fs.PathError{Op: "chown", Path: "/x", Err: syscall.EPERM}, wasi.EPERM},
+		{&fs.PathError{Op: "open", Path: "/x", Err: syscall.EACCES}, wasi.EACCES},
+		{errors.New("something else"), wasi.EIO},
 	} {
 		if got := systemErrno(tt.err); got != tt.want {
 			t.Errorf("systemErrno(%v) = %d, want %d", tt.err, got, tt.want)

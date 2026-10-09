@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mpyw/gophper/internal/wasi"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 )
@@ -127,16 +128,16 @@ func TestProcessSpawnRejects(t *testing.T) {
 		call    processSpawnCall
 		want    int32
 	}{
-		{"processes off", false, sh, errnoEPERM},
-		{"cwd without a host directory", true, processSpawnCall{path: "/bin/sh", cwd: "/unmapped"}, errnoENOENT},
-		{"program not found", true, processSpawnCall{path: "/no/such/program", cwd: dir}, errnoENOENT},
-		{"unknown fd kind", true, with(processSpawnFD{fd: 1, kind: 99}), errnoEINVAL},
-		{"unknown stdio", true, with(processSpawnFD{fd: 1, kind: processChildStdio, value: 7}), errnoEBADF},
-		{"stdio above stderr", true, with(processSpawnFD{fd: 3, kind: processChildStdio, value: 1}), errnoEBADF},
-		{"file without a host file", true, with(processSpawnFD{fd: 1, kind: processChildFile, flags: processOpenWrite, path: "/unmapped/f"}), errnoEBADF},
-		{"write to a read-only file", true, with(processSpawnFD{fd: 1, kind: processChildFile, flags: processOpenWrite | processOpenCreate, path: filepath.Join(ro, "f")}), errnoEACCES},
-		{"missing file", true, with(processSpawnFD{fd: 0, kind: processChildFile, flags: processOpenRead, path: filepath.Join(dir, "missing")}), errnoENOENT},
-		{"exclusive on an existing file", true, with(processSpawnFD{fd: 1, kind: processChildFile, flags: processOpenWrite | processOpenCreate | processOpenExclusive, path: dir}), errnoEIO},
+		{"processes off", false, sh, wasi.EPERM},
+		{"cwd without a host directory", true, processSpawnCall{path: "/bin/sh", cwd: "/unmapped"}, wasi.ENOENT},
+		{"program not found", true, processSpawnCall{path: "/no/such/program", cwd: dir}, wasi.ENOENT},
+		{"unknown fd kind", true, with(processSpawnFD{fd: 1, kind: 99}), wasi.EINVAL},
+		{"unknown stdio", true, with(processSpawnFD{fd: 1, kind: processChildStdio, value: 7}), wasi.EBADF},
+		{"stdio above stderr", true, with(processSpawnFD{fd: 3, kind: processChildStdio, value: 1}), wasi.EBADF},
+		{"file without a host file", true, with(processSpawnFD{fd: 1, kind: processChildFile, flags: processOpenWrite, path: "/unmapped/f"}), wasi.EBADF},
+		{"write to a read-only file", true, with(processSpawnFD{fd: 1, kind: processChildFile, flags: processOpenWrite | processOpenCreate, path: filepath.Join(ro, "f")}), wasi.EACCES},
+		{"missing file", true, with(processSpawnFD{fd: 0, kind: processChildFile, flags: processOpenRead, path: filepath.Join(dir, "missing")}), wasi.ENOENT},
+		{"exclusive on an existing file", true, with(processSpawnFD{fd: 1, kind: processChildFile, flags: processOpenWrite | processOpenCreate | processOpenExclusive, path: dir}), wasi.EIO},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			p := newProcessTable(run, tt.allowed, ro)
@@ -162,10 +163,10 @@ func TestProcessWaitAndKill(t *testing.T) {
 	x := processExports{from: func(context.Context) *Processes { return p }}
 	const statusPtr = 64
 
-	if got := x.wait(ctx, m, -1, 1, statusPtr); got != -errnoECHILD {
+	if got := x.wait(ctx, m, -1, 1, statusPtr); got != -wasi.ECHILD {
 		t.Errorf("wait without children: %d, want -ECHILD", got)
 	}
-	if got := x.kill(ctx, 99999, 15); got != errnoESRCH {
+	if got := x.kill(ctx, 99999, 15); got != wasi.ESRCH {
 		t.Errorf("kill of a stranger: %d, want ESRCH", got)
 	}
 
@@ -194,7 +195,7 @@ func TestProcessWaitAndKill(t *testing.T) {
 		sig, want int32
 	}{
 		{0, 0},            // only checks that the child exists
-		{64, errnoEINVAL}, // no such signal
+		{64, wasi.EINVAL}, // no such signal
 		{9, 0},            // SIGKILL
 	} {
 		if got := x.kill(ctx, pid, tt.sig); got != tt.want {
@@ -229,13 +230,13 @@ func TestProcessWaitAndKill(t *testing.T) {
 		t.Fatalf("spawn: errno %d", errno)
 	}
 	close(run.intr)
-	if got := x.wait(ctx, m, -1, 0, statusPtr); got != -errnoEINTR {
+	if got := x.wait(ctx, m, -1, 0, statusPtr); got != -wasi.EINTR {
 		t.Errorf("interrupted wait: %d, want -EINTR", got)
 	}
 	run.intr = make(chan struct{})
 	p.run = run
 	cancel()
-	if got := x.wait(ctx, m, -1, 0, statusPtr); got != -errnoEIO {
+	if got := x.wait(ctx, m, -1, 0, statusPtr); got != -wasi.EIO {
 		t.Errorf("wait after the run: %d, want -EIO", got)
 	}
 	for cpid := range p.children {

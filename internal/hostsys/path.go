@@ -9,6 +9,7 @@ import (
 	"os"
 	"syscall"
 
+	"github.com/mpyw/gophper/internal/wasi"
 	"github.com/tetratelabs/wazero/api"
 )
 
@@ -34,7 +35,7 @@ func (x systemPathExports) resolve(ctx context.Context, m api.Module, ptr, n uin
 func (x systemPathExports) stat(ctx context.Context, m api.Module, pathPtr, pathLen uint32, follow int32, out uint32) int32 {
 	host, _, ok := x.resolve(ctx, m, pathPtr, pathLen)
 	if !ok {
-		return errnoENOENT
+		return wasi.ENOENT
 	}
 	var st fs.FileInfo
 	var err error
@@ -59,9 +60,9 @@ func (x systemPathExports) access(ctx context.Context, m api.Module, pathPtr, pa
 	host, writable, ok := x.resolve(ctx, m, pathPtr, pathLen)
 	switch {
 	case !ok:
-		return errnoENOENT
+		return wasi.ENOENT
 	case mode&systemAccessWrite != 0 && !writable:
-		return errnoEROFS
+		return wasi.EROFS
 	}
 	return systemErrno(systemAccess(host, mode))
 }
@@ -70,9 +71,9 @@ func (x systemPathExports) chmod(ctx context.Context, m api.Module, pathPtr, pat
 	host, writable, ok := x.resolve(ctx, m, pathPtr, pathLen)
 	switch {
 	case !ok:
-		return errnoENOENT
+		return wasi.ENOENT
 	case !writable:
-		return errnoEROFS
+		return wasi.EROFS
 	}
 	fm := fs.FileMode(mode) & fs.ModePerm
 	if mode&0o4000 != 0 {
@@ -92,9 +93,9 @@ func (x systemPathExports) chown(ctx context.Context, m api.Module, pathPtr, pat
 	host, writable, ok := x.resolve(ctx, m, pathPtr, pathLen)
 	switch {
 	case !ok:
-		return errnoENOENT
+		return wasi.ENOENT
 	case !writable:
-		return errnoEROFS
+		return wasi.EROFS
 	}
 	if follow != 0 {
 		return systemErrno(os.Chown(host, int(uid), int(gid)))
@@ -122,13 +123,13 @@ func systemErrno(err error) int32 {
 	case err == nil:
 		return 0
 	case errors.Is(err, fs.ErrNotExist):
-		return errnoENOENT
+		return wasi.ENOENT
 	case errors.Is(err, syscall.EPERM):
 		// chown and chmod of a file the user does not own. fs.ErrPermission
 		// matches it too, but "Permission denied" would be the wrong message.
-		return errnoEPERM
+		return wasi.EPERM
 	case errors.Is(err, fs.ErrPermission):
-		return errnoEACCES
+		return wasi.EACCES
 	}
-	return errnoEIO
+	return wasi.EIO
 }

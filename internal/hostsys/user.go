@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/mpyw/gophper/internal/wasi"
 	"github.com/tetratelabs/wazero/api"
 )
 
@@ -52,7 +53,7 @@ func userGet(_ context.Context, m api.Module, kind, id int32, namePtr, nameLen, 
 	case userByID, userByName:
 		u, err := userLookup(kind == userByID, id, name)
 		if err != nil {
-			return -errnoENOENT
+			return -wasi.ENOENT
 		}
 		fields = []string{u.Username, "x", u.Uid, u.Gid, u.Name, u.HomeDir, userShell(u)}
 	case userGroupByID, userGroupName:
@@ -64,12 +65,12 @@ func userGet(_ context.Context, m api.Module, kind, id int32, namePtr, nameLen, 
 			g, err = user.LookupGroup(name)
 		}
 		if err != nil {
-			return -errnoENOENT
+			return -wasi.ENOENT
 		}
 		// os/user does not list members.
 		fields = []string{g.Name, "x", g.Gid, ""}
 	default:
-		return -errnoEINVAL
+		return -wasi.EINVAL
 	}
 	text := strings.Join(fields, "\x00") + "\x00"
 	if len(text) <= int(capacity) {
@@ -118,7 +119,7 @@ func userShell(u *user.User) string {
 func userHostName(_ context.Context, m api.Module, out uint32, capacity int32) int32 {
 	name, err := os.Hostname()
 	if err != nil {
-		return -errnoEIO
+		return -wasi.EIO
 	}
 	if len(name) > int(capacity) {
 		name = name[:capacity]

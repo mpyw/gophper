@@ -8,6 +8,8 @@ import (
 	"os"
 	"syscall"
 	"testing"
+
+	"github.com/mpyw/gophper/internal/wasi"
 )
 
 func TestErrnoFrom(t *testing.T) {
@@ -23,12 +25,12 @@ func TestErrnoFrom(t *testing.T) {
 		want int32
 	}{
 		{nil, 0},
-		{&net.OpError{Op: "read", Err: os.ErrDeadlineExceeded}, errnoETIMEDOUT},
-		{fmt.Errorf("write: %w", net.ErrClosed), errnoEBADF},
-		{&net.OpError{Op: "dial", Err: context.Canceled}, errnoEINTR},
-		{&net.OpError{Op: "dial", Err: &net.DNSError{Err: "no such host", Name: "x.invalid", IsNotFound: true}}, errnoEHOSTUNREACH},
-		{errors.New("anything else"), errnoEIO},
-		{syscall.EPERM, errnoEACCES},
+		{&net.OpError{Op: "read", Err: os.ErrDeadlineExceeded}, wasi.ETIMEDOUT},
+		{fmt.Errorf("write: %w", net.ErrClosed), wasi.EBADF},
+		{&net.OpError{Op: "dial", Err: context.Canceled}, wasi.EINTR},
+		{&net.OpError{Op: "dial", Err: &net.DNSError{Err: "no such host", Name: "x.invalid", IsNotFound: true}}, wasi.EHOSTUNREACH},
+		{errors.New("anything else"), wasi.EIO},
+		{syscall.EPERM, wasi.EACCES},
 	} {
 		if got := errnoFrom(c.err); got != c.want {
 			t.Errorf("errnoFrom(%v) = %d, want %d", c.err, got, c.want)

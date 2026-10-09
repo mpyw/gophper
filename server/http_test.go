@@ -46,6 +46,13 @@ func startHTTPWith(t *testing.T, configure func(*server.HTTPConfig)) *httptest.S
 	return srv
 }
 
+// writerFunc adapts a function to io.Writer.
+//
+//declscope:shared // fastcgi_test.go collects logs with it too
+type writerFunc func([]byte) (int, error)
+
+func (f writerFunc) Write(p []byte) (int, error) { return f(p) }
+
 // noRedirect returns the first response, without following Location.
 var noRedirect = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 

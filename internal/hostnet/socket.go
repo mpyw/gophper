@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/mpyw/gophper/internal/wasi"
 	"github.com/tetratelabs/wazero"
 	"github.com/tetratelabs/wazero/api"
 )
@@ -99,7 +100,7 @@ func (socketPlaceholderFS) Open(name string) (fs.File, error) {
 
 // Sockets holds the sockets of one PHP instance, keyed by guest fd.
 type Sockets struct {
-	run     Run
+	run     wasi.Run
 	mu      sync.Mutex
 	entries map[int32]*socketEntry
 	// changed is closed on any change to any socket, then replaced.
@@ -107,7 +108,7 @@ type Sockets struct {
 }
 
 // NewSockets returns an empty table for one PHP instance.
-func NewSockets(run Run) *Sockets {
+func NewSockets(run wasi.Run) *Sockets {
 	return &Sockets{run: run, entries: map[int32]*socketEntry{}, changed: make(chan struct{})}
 }
 
@@ -151,16 +152,16 @@ func (t *Sockets) wait(ready func() bool, timeout time.Duration) int32 {
 			t.mu.Lock()
 		case <-intr:
 			t.mu.Lock()
-			return errnoEINTR
+			return wasi.EINTR
 		case <-t.run.Context().Done():
 			t.mu.Lock()
-			return errnoEIO
+			return wasi.EIO
 		case <-timer:
 			t.mu.Lock()
 			if ready() {
 				return 0
 			}
-			return errnoEAGAIN
+			return wasi.EAGAIN
 		}
 	}
 	return 0
@@ -392,7 +393,7 @@ func socketString(m api.Module, ptr, n uint32) string {
 func (x socketExports) open(ctx context.Context, fd, kind int32) int32 {
 	t := x.from(ctx)
 	if kind < socketTCP || kind > socketUnixgram {
-		return errnoEPROTONOSUPPORT
+		return wasi.EPROTONOSUPPORT
 	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -420,13 +421,13 @@ func (x socketExports) connect(ctx context.Context, m api.Module, fd int32, addr
 	e := t.entries[fd]
 	switch {
 	case e == nil:
-		return errnoEBADF
+		return wasi.EBADF
 	case e.conn != nil:
-		return errnoEISCONN
+		return wasi.EISCONN
 	case e.connecting:
-		return errnoEALREADY
+		return wasi.EALREADY
 	case e.listener != nil:
-		return errnoEINVAL
+		return wasi.EINVAL
 	}
 
 	if e.datagram() {
@@ -462,7 +463,7 @@ func (x socketExports) connect(ctx context.Context, m api.Module, fd int32, addr
 			}
 			t.notify()
 		}()
-		return errnoEINPROGRESS
+		return wasi.EINPROGRESS
 	}
 
 	dctx, cancel := interruptibleRunContext(t.run)
@@ -475,7 +476,7 @@ func (x socketExports) connect(ctx context.Context, m api.Module, fd int32, addr
 	t.notify()
 	if err != nil {
 		if interrupted {
-			return errnoEINTR
+			return wasi.EINTR
 		}
 		return errnoFrom(err)
 	}
@@ -490,10 +491,10 @@ func (x socketExports) bind(ctx context.Context, m api.Module, fd int32, addrPtr
 	defer t.mu.Unlock()
 	e := t.entries[fd]
 	if e == nil {
-		return errnoEBADF
+		return wasi.EBADF
 	}
 	if e.bound != "" || e.conn != nil {
-		return errnoEINVAL
+		return wasi.EINVAL
 	}
 	if e.datagram() {
 		pc, err := net.ListenPacket(e.network(), addr)
@@ -516,16 +517,16 @@ func (x socketExports) listen(ctx context.Context, fd, backlog int32) int32 {
 	e := t.entries[fd]
 	switch {
 	case e == nil:
-		return errnoEBADF
+		return wasi.EBADF
 	case e.datagram():
-		return errnoENOTSUP
+		return wasi.ENOTSUP
 	case e.listener != nil:
 		return 0
 	}
 	addr := e.bound
 	if addr == "" {
 		if e.kind == socketUnix {
-			return errnoEINVAL
+			return wasi.EINVAL
 		}
 		addr = ":0"
 	}
@@ -544,7 +545,7 @@ func (x socketExports) accept(ctx context.Context, fd, newFD, nonblock int32) in
 	defer t.mu.Unlock()
 	e := t.entries[fd]
 	if e == nil || e.listener == nil {
-		return errnoEINVAL
+		return wasi.EINVAL
 	}
 	timeout := time.Duration(-1)
 	if nonblock != 0 {
@@ -557,7 +558,7 @@ func (x socketExports) accept(ctx context.Context, fd, newFD, nonblock int32) in
 		if e.acceptErr != nil {
 			return errnoFrom(e.acceptErr)
 		}
-		return errnoEBADF
+		return wasi.EBADF
 	}
 	conn := e.pending[0]
 	e.pending = e.pending[1:]
@@ -573,7 +574,7 @@ func (x socketExports) recv(ctx context.Context, m api.Module, fd int32, bufPtr 
 	defer t.mu.Unlock()
 	e := t.entries[fd]
 	if e == nil {
-		return -errnoEBADF
+		return -wasi.EBADF
 	}
 	timeout := time.Duration(-1)
 	if flags&socketMsgDontwait != 0 {
@@ -583,13 +584,13 @@ func (x socketExports) recv(ctx context.Context, m api.Module, fd int32, bufPtr 
 
 	if e.datagram() {
 		if e.conn == nil && e.packet == nil {
-			return -errnoENOTCONN
+			return -wasi.ENOTCONN
 		}
 		if errno := t.wait(func() bool { return len(e.packets) > 0 || e.closed }, timeout); errno != 0 {
 			return -errno
 		}
 		if len(e.packets) == 0 {
-			return -errnoEBADF
+			return -wasi.EBADF
 		}
 		p := e.packets[0]
 		if !peek {
@@ -605,10 +606,10 @@ func (x socketExports) recv(ctx context.Context, m api.Module, fd int32, bufPtr 
 		if e.soError != 0 {
 			return -e.soError
 		}
-		return -errnoENOTCONN
+		return -wasi.ENOTCONN
 	}
 	if e.pipe == socketPipeWrite {
-		return -errnoEBADF
+		return -wasi.EBADF
 	}
 	t.startReading(e)
 	ready := func() bool {
@@ -631,7 +632,7 @@ func (x socketExports) recv(ctx context.Context, m api.Module, fd int32, bufPtr 
 	}
 	switch {
 	case e.recvErr == nil:
-		return -errnoENOTCONN
+		return -wasi.ENOTCONN
 	case errors.Is(e.recvErr, io.EOF):
 		return 0
 	}
@@ -653,7 +654,7 @@ func (x socketExports) send(ctx context.Context, m api.Module, fd int32, bufPtr 
 	t := x.from(ctx)
 	data, ok := m.Memory().Read(bufPtr, uint32(n))
 	if !ok {
-		return -errnoEINVAL
+		return -wasi.EINVAL
 	}
 	data = append([]byte(nil), data...)
 	to := ""
@@ -665,7 +666,7 @@ func (x socketExports) send(ctx context.Context, m api.Module, fd int32, bufPtr 
 	e := t.entries[fd]
 	if e == nil {
 		t.mu.Unlock()
-		return -errnoEBADF
+		return -wasi.EBADF
 	}
 
 	if e.datagram() {
@@ -673,13 +674,13 @@ func (x socketExports) send(ctx context.Context, m api.Module, fd int32, bufPtr 
 			// As on BSD, a connected socket sends only to its peer. Sending
 			// through e.packet would come from another port.
 			t.mu.Unlock()
-			return -errnoEISCONN
+			return -wasi.EISCONN
 		}
 		if to == "" || e.conn != nil {
 			conn := e.conn
 			t.mu.Unlock()
 			if conn == nil {
-				return -errnoEDESTADDRREQ
+				return -wasi.EDESTADDRREQ
 			}
 			written, err := conn.Write(data)
 			if err != nil {
@@ -690,7 +691,7 @@ func (x socketExports) send(ctx context.Context, m api.Module, fd int32, bufPtr 
 		if e.packet == nil {
 			if e.kind != socketUDP {
 				t.mu.Unlock()
-				return -errnoENOTSUP
+				return -wasi.ENOTSUP
 			}
 			// sendto(2) on an unbound socket binds it to an ephemeral port.
 			pc, err := net.ListenPacket("udp", ":0")
@@ -723,7 +724,7 @@ func (x socketExports) send(ctx context.Context, m api.Module, fd int32, bufPtr 
 	if e.connecting {
 		if flags&socketMsgDontwait != 0 {
 			t.mu.Unlock()
-			return -errnoEAGAIN
+			return -wasi.EAGAIN
 		}
 		if errno := t.wait(func() bool { return !e.connecting || e.closed }, -1); errno != 0 {
 			t.mu.Unlock()
@@ -736,14 +737,14 @@ func (x socketExports) send(ctx context.Context, m api.Module, fd int32, bufPtr 
 	case conn == nil && soErr != 0:
 		return -soErr
 	case conn == nil:
-		return -errnoENOTCONN
+		return -wasi.ENOTCONN
 	case shut:
-		return -errnoEPIPE
+		return -wasi.EPIPE
 	}
 	written, err := conn.Write(data)
 	if err != nil {
 		if errors.Is(err, net.ErrClosed) {
-			return -errnoEPIPE
+			return -wasi.EPIPE
 		}
 		return -errnoFrom(err)
 	}
@@ -756,10 +757,10 @@ func (x socketExports) shutdown(ctx context.Context, fd, how int32) int32 {
 	defer t.mu.Unlock()
 	e := t.entries[fd]
 	if e == nil {
-		return errnoEBADF
+		return wasi.EBADF
 	}
 	if e.conn == nil {
-		return errnoENOTCONN
+		return wasi.ENOTCONN
 	}
 	half, ok := e.conn.(interface {
 		CloseRead() error
@@ -785,12 +786,12 @@ func (x socketExports) name(ctx context.Context, m api.Module, fd, peer int32, o
 	defer t.mu.Unlock()
 	e := t.entries[fd]
 	if e == nil {
-		return errnoEBADF
+		return wasi.EBADF
 	}
 	var text string
 	switch {
 	case peer != 0 && e.conn == nil:
-		return errnoENOTCONN
+		return wasi.ENOTCONN
 	case peer != 0:
 		text = socketAddrText(e.conn.RemoteAddr())
 	case e.conn != nil:
@@ -814,7 +815,7 @@ func (x socketExports) getopt(ctx context.Context, m api.Module, fd, opt int32, 
 	defer t.mu.Unlock()
 	e := t.entries[fd]
 	if e == nil {
-		return errnoEBADF
+		return wasi.EBADF
 	}
 	b := func(v bool) int32 {
 		if v {
@@ -839,7 +840,7 @@ func (x socketExports) getopt(ctx context.Context, m api.Module, fd, opt int32, 
 	case socketOptSndbuf:
 		v = e.sndbuf
 	default:
-		return errnoEINVAL
+		return wasi.EINVAL
 	}
 	m.Memory().WriteUint32Le(valuePtr, uint32(v))
 	return 0
@@ -851,7 +852,7 @@ func (x socketExports) setopt(ctx context.Context, fd, opt, value int32) int32 {
 	defer t.mu.Unlock()
 	e := t.entries[fd]
 	if e == nil {
-		return errnoEBADF
+		return wasi.EBADF
 	}
 	tc, _ := e.conn.(*net.TCPConn)
 	on := value != 0
@@ -882,7 +883,7 @@ func (x socketExports) setopt(ctx context.Context, fd, opt, value int32) int32 {
 			tc.SetWriteBuffer(int(value))
 		}
 	default:
-		return errnoEINVAL
+		return wasi.EINVAL
 	}
 	return 0
 }
@@ -923,7 +924,7 @@ func (x socketExports) poll(ctx context.Context, m api.Module, fdsPtr, eventsPtr
 	if timeoutMs < 0 {
 		timeout = -1
 	}
-	if errno := t.wait(scan, timeout); errno == errnoEINTR || errno == errnoEIO {
+	if errno := t.wait(scan, timeout); errno == wasi.EINTR || errno == wasi.EIO {
 		return -errno
 	}
 	for i := range got {
@@ -938,7 +939,7 @@ func (x socketExports) available(ctx context.Context, fd int32) int32 {
 	defer t.mu.Unlock()
 	e := t.entries[fd]
 	if e == nil {
-		return -errnoEBADF
+		return -wasi.EBADF
 	}
 	if e.datagram() {
 		if len(e.packets) > 0 {

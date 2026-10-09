@@ -8,11 +8,11 @@ import (
 	"github.com/tetratelabs/wazero/api"
 )
 
-// newMemoryModule returns a module with one page of linear memory, to call
+// newGuest returns a module with one page of linear memory, to call
 // the host functions with as the guest would.
 //
 //declscope:shared // user_test.go, path_test.go and lock_test.go
-func newMemoryModule(t *testing.T) api.Module {
+func newGuest(t *testing.T) api.Module {
 	t.Helper()
 	ctx := context.Background()
 	r := wazero.NewRuntime(ctx)
@@ -25,13 +25,13 @@ func newMemoryModule(t *testing.T) api.Module {
 	return m
 }
 
-// memoryTestRun is a SystemRun whose interrupt and context the test controls.
+// guestRun is a wasi.Run whose interrupt and context the test controls.
 //
 //declscope:shared // path_test.go and lock_test.go
-type memoryTestRun struct {
+type guestRun struct {
 	ctx  context.Context
 	intr chan struct{}
 }
 
-func (r memoryTestRun) Context() context.Context      { return r.ctx }
-func (r memoryTestRun) Interruption() <-chan struct{} { return r.intr }
+func (r guestRun) Context() context.Context      { return r.ctx }
+func (r guestRun) Interruption() <-chan struct{} { return r.intr }

@@ -7,12 +7,14 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+
+	"github.com/mpyw/gophper/internal/wasi"
 )
 
 // getUser calls user_get and returns its result and the fields it wrote.
 func getUser(t *testing.T, kind, id int32, name string, capacity int32) (int32, []string) {
 	t.Helper()
-	m := newMemoryModule(t)
+	m := newGuest(t)
 	const namePtr, out = 16, 1024
 	m.Memory().WriteString(namePtr, name)
 	n := userGet(context.Background(), m, kind, id, namePtr, uint32(len(name)), out, capacity)
@@ -48,7 +50,7 @@ func TestUserGet(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			n, got := getUser(t, tt.kind, tt.id, tt.key, 4096)
 			if tt.want == nil {
-				if n != -errnoENOENT {
+				if n != -wasi.ENOENT {
 					t.Errorf("got %d %q, want -ENOENT", n, got)
 				}
 				return
@@ -81,7 +83,7 @@ func TestUserGet(t *testing.T) {
 	})
 
 	t.Run("unknown kind", func(t *testing.T) {
-		if n, _ := getUser(t, 99, 0, "", 4096); n != -errnoEINVAL {
+		if n, _ := getUser(t, 99, 0, "", 4096); n != -wasi.EINVAL {
 			t.Errorf("got %d, want -EINVAL", n)
 		}
 	})
@@ -119,7 +121,7 @@ func TestUserLookupCurrent(t *testing.T) {
 }
 
 func TestUserIDsAndHostName(t *testing.T) {
-	m := newMemoryModule(t)
+	m := newGuest(t)
 	mem := m.Memory()
 	const out = 64
 	groups, _ := os.Getgroups()

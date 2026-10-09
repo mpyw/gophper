@@ -5,22 +5,8 @@ import (
 	"io/fs"
 	"os/exec"
 	"syscall"
-)
 
-// WASI errno values, as wasi-libc numbers them (__errno_values.h).
-//
-//declscope:shared // process.go returns them from host functions
-const (
-	errnoEACCES  int32 = 2
-	errnoEBADF   int32 = 8
-	errnoECHILD  int32 = 12
-	errnoEINTR   int32 = 27
-	errnoEINVAL  int32 = 28
-	errnoEIO     int32 = 29
-	errnoENOENT  int32 = 44
-	errnoENOEXEC int32 = 45
-	errnoEPERM   int32 = 63
-	errnoESRCH   int32 = 71
+	"github.com/mpyw/gophper/internal/wasi"
 )
 
 // errnoFrom maps an error from starting or signaling a process to the WASI
@@ -32,13 +18,13 @@ func errnoFrom(err error) int32 {
 	case err == nil:
 		return 0
 	case errors.Is(err, exec.ErrNotFound), errors.Is(err, fs.ErrNotExist):
-		return errnoENOENT
+		return wasi.ENOENT
 	case errors.Is(err, fs.ErrPermission):
-		return errnoEACCES
+		return wasi.EACCES
 	case errors.Is(err, syscall.ENOEXEC):
-		return errnoENOEXEC
+		return wasi.ENOEXEC
 	case errors.Is(err, syscall.ESRCH):
-		return errnoESRCH
+		return wasi.ESRCH
 	}
-	return errnoEIO
+	return wasi.EIO
 }

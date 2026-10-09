@@ -8,6 +8,7 @@ import (
 	"os"
 	"time"
 
+	"github.com/mpyw/gophper/internal/wasi"
 	"github.com/tetratelabs/wazero/api"
 )
 
@@ -49,17 +50,17 @@ func (x systemLockExports) lock(ctx context.Context, m api.Module, fd int32, pat
 		return 0
 	}
 	if op&(systemLockShared|systemLockExclusive) == 0 {
-		return errnoEINVAL
+		return wasi.EINVAL
 	}
 	if f == nil {
 		host, _, ok := s.hostPath(path)
 		if !ok {
 			// No host file: nothing else can hold the lock.
-			return errnoEINVAL
+			return wasi.EINVAL
 		}
 		var err error
 		if f, err = os.Open(host); err != nil {
-			return errnoEBADF
+			return wasi.EBADF
 		}
 	}
 	keep := func() {
@@ -76,19 +77,19 @@ func (x systemLockExports) lock(ctx context.Context, m api.Module, fd int32, pat
 			return 0
 		case !errors.Is(err, errSystemLockBusy):
 			f.Close()
-			return errnoEIO
+			return wasi.EIO
 		case op&systemLockNonblock != 0:
 			keep()
-			return errnoEAGAIN
+			return wasi.EAGAIN
 		}
 		select {
 		case <-time.After(systemLockPoll):
 		case <-intr:
 			keep()
-			return errnoEINTR
+			return wasi.EINTR
 		case <-s.run.Context().Done():
 			keep()
-			return errnoEIO
+			return wasi.EIO
 		}
 	}
 }

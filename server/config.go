@@ -27,11 +27,11 @@ type PHPConfig struct {
 	ErrorLog io.Writer
 	// AccessLog receives one line per request. Nil means none.
 	AccessLog io.Writer
-	// OpcacheDir keeps opcache's compiled scripts between requests. Each
-	// request runs in a fresh instance, which starts with an empty opcache,
-	// so opcache.file_cache is what makes it useful. Each build of the PHP
-	// binaries gets a directory inside. Default: "gophper/opcache" in the
-	// user cache directory.
+	// OpcacheDir keeps opcache's compiled scripts in files. A worker also
+	// keeps them in its own shared memory, which ends with the worker, and
+	// a fresh instance starts with none. The files outlive both. Each build
+	// of the PHP binaries gets a directory inside. Default: "gophper/opcache"
+	// in the user cache directory.
 	OpcacheDir string
 	// NoOpcache leaves opcache off.
 	NoOpcache bool

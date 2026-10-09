@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"syscall"
 	"testing"
+
+	"github.com/mpyw/gophper/internal/wasi"
 )
 
 func TestErrnoFrom(t *testing.T) {
@@ -15,12 +17,12 @@ func TestErrnoFrom(t *testing.T) {
 		want int32
 	}{
 		{nil, 0},
-		{exec.ErrNotFound, errnoENOENT},
-		{&fs.PathError{Op: "fork/exec", Path: "/x", Err: syscall.ENOENT}, errnoENOENT},
-		{&fs.PathError{Op: "fork/exec", Path: "/x", Err: syscall.EACCES}, errnoEACCES},
-		{&fs.PathError{Op: "fork/exec", Path: "/x", Err: syscall.ENOEXEC}, errnoENOEXEC},
-		{fmt.Errorf("signal: %w", syscall.ESRCH), errnoESRCH},
-		{errors.New("something else"), errnoEIO},
+		{exec.ErrNotFound, wasi.ENOENT},
+		{&fs.PathError{Op: "fork/exec", Path: "/x", Err: syscall.ENOENT}, wasi.ENOENT},
+		{&fs.PathError{Op: "fork/exec", Path: "/x", Err: syscall.EACCES}, wasi.EACCES},
+		{&fs.PathError{Op: "fork/exec", Path: "/x", Err: syscall.ENOEXEC}, wasi.ENOEXEC},
+		{fmt.Errorf("signal: %w", syscall.ESRCH), wasi.ESRCH},
+		{errors.New("something else"), wasi.EIO},
 	} {
 		if got := errnoFrom(tt.err); got != tt.want {
 			t.Errorf("errnoFrom(%v) = %d, want %d", tt.err, got, tt.want)

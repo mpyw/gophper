@@ -11,6 +11,7 @@ import (
 	"github.com/tetratelabs/wazero"
 
 	"github.com/mpyw/gophper/internal/hostproc"
+	"github.com/mpyw/gophper/internal/wasi"
 )
 
 // Signals for PHP. gophper-wasm's compat/gophper_signal.c keeps the
@@ -129,9 +130,9 @@ func (i *engineInstance) waitSignal(mask uint64, timeoutMs int32) int32 {
 		case <-timer:
 			return 0
 		case <-intr:
-			return -engineErrnoEINTR
+			return -wasi.EINTR
 		case <-i.ctx.Done():
-			return -engineErrnoEIO
+			return -wasi.EIO
 		}
 	}
 }
@@ -168,9 +169,3 @@ func (i *engineInstance) forwardSignals(ch <-chan os.Signal, done <-chan struct{
 		}
 	}
 }
-
-// WASI errno values, as wasi-libc numbers them.
-const (
-	engineErrnoEINTR = 27
-	engineErrnoEIO   = 29
-)

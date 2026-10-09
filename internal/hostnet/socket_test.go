@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mpyw/gophper/internal/wasi"
 	"github.com/tetratelabs/wazero/api"
 )
 
@@ -218,18 +219,18 @@ func TestSocketUnknownFD(t *testing.T) {
 		"close":     h.x.close(h.ctx, fd),
 	}
 	want := map[string]int32{
-		"open":      errnoEPROTONOSUPPORT,
-		"connect":   errnoEBADF,
-		"bind":      errnoEBADF,
-		"listen":    errnoEBADF,
-		"accept":    errnoEINVAL,
-		"recv":      -errnoEBADF,
-		"send":      -errnoEBADF,
-		"shutdown":  errnoEBADF,
-		"name":      errnoEBADF,
-		"getopt":    errnoEBADF,
-		"setopt":    errnoEBADF,
-		"available": -errnoEBADF,
+		"open":      wasi.EPROTONOSUPPORT,
+		"connect":   wasi.EBADF,
+		"bind":      wasi.EBADF,
+		"listen":    wasi.EBADF,
+		"accept":    wasi.EINVAL,
+		"recv":      -wasi.EBADF,
+		"send":      -wasi.EBADF,
+		"shutdown":  wasi.EBADF,
+		"name":      wasi.EBADF,
+		"getopt":    wasi.EBADF,
+		"setopt":    wasi.EBADF,
+		"available": -wasi.EBADF,
 		"close":     0,
 	}
 	for k, w := range want {
@@ -267,10 +268,10 @@ func TestSocketOptions(t *testing.T) {
 			t.Errorf("getopt(%d) after clearing = %d", opt.opt, v)
 		}
 	}
-	if errno := h.x.setopt(h.ctx, 1, 99, 1); errno != errnoEINVAL {
+	if errno := h.x.setopt(h.ctx, 1, 99, 1); errno != wasi.EINVAL {
 		t.Errorf("setopt(unknown) = %d", errno)
 	}
-	if _, errno := h.getopt(1, 99); errno != errnoEINVAL {
+	if _, errno := h.getopt(1, 99); errno != wasi.EINVAL {
 		t.Errorf("getopt(unknown) = %d", errno)
 	}
 	if v, errno := h.getopt(1, socketOptError); errno != 0 || v != 0 {
@@ -305,7 +306,7 @@ func TestSocketAcceptInheritsOptions(t *testing.T) {
 	if errno := h.x.listen(h.ctx, 1, 8); errno != 0 {
 		t.Errorf("listen again = %d", errno)
 	}
-	if errno := h.x.accept(h.ctx, 1, 2, 1); errno != errnoEAGAIN {
+	if errno := h.x.accept(h.ctx, 1, 2, 1); errno != wasi.EAGAIN {
 		t.Errorf("non-blocking accept with nobody waiting = %d", errno)
 	}
 	addr, _ := h.name(1, 0, 64)
@@ -329,7 +330,7 @@ func TestSocketAcceptInheritsOptions(t *testing.T) {
 	if got := h.recvAll(2, len("from client")); got != "from client" {
 		t.Errorf("recv = %q", got)
 	}
-	if errno := h.x.accept(h.ctx, 2, 3, 1); errno != errnoEINVAL {
+	if errno := h.x.accept(h.ctx, 2, 3, 1); errno != wasi.EINVAL {
 		t.Errorf("accept on a connection = %d", errno)
 	}
 }
@@ -340,7 +341,7 @@ func TestSocketAcceptAfterListenerFails(t *testing.T) {
 	h.x.listen(h.ctx, 1, 8)
 	// The listener dies under the socket, as on a host error.
 	h.entry(1).listener.Close()
-	if errno := h.x.accept(h.ctx, 1, 2, 0); errno != errnoEBADF {
+	if errno := h.x.accept(h.ctx, 1, 2, 0); errno != wasi.EBADF {
 		t.Errorf("accept = %d, want EBADF", errno)
 	}
 }
@@ -351,7 +352,7 @@ func TestSocketConnectStates(t *testing.T) {
 
 	h.open(1, socketTCP)
 	h.x.listen(h.ctx, 1, 1)
-	if errno := h.connect(1, l.Addr().String(), 0); errno != errnoEINVAL {
+	if errno := h.connect(1, l.Addr().String(), 0); errno != wasi.EINVAL {
 		t.Errorf("connect on a listener = %d", errno)
 	}
 
@@ -368,10 +369,10 @@ func TestSocketConnectStates(t *testing.T) {
 	if local, _ := h.name(2, 0, 64); !strings.HasPrefix(local, "127.0.0.1:") || local == "127.0.0.1:0" {
 		t.Errorf("local name = %q", local)
 	}
-	if errno := h.connect(2, l.Addr().String(), 0); errno != errnoEISCONN {
+	if errno := h.connect(2, l.Addr().String(), 0); errno != wasi.EISCONN {
 		t.Errorf("connect twice = %d", errno)
 	}
-	if errno := h.bind(2, "127.0.0.1:0"); errno != errnoEINVAL {
+	if errno := h.bind(2, "127.0.0.1:0"); errno != wasi.EINVAL {
 		t.Errorf("bind after connect = %d", errno)
 	}
 	if n := h.send(2, "ping", "", 0); n != 4 {
@@ -386,10 +387,10 @@ func TestSocketConnectStates(t *testing.T) {
 	h.tab.mu.Lock()
 	h.tab.entries[3].connecting = true
 	h.tab.mu.Unlock()
-	if errno := h.connect(3, l.Addr().String(), 1); errno != errnoEALREADY {
+	if errno := h.connect(3, l.Addr().String(), 1); errno != wasi.EALREADY {
 		t.Errorf("connect while connecting = %d", errno)
 	}
-	if n := h.send(3, "x", "", socketMsgDontwait); n != -errnoEAGAIN {
+	if n := h.send(3, "x", "", socketMsgDontwait); n != -wasi.EAGAIN {
 		t.Errorf("non-blocking send while connecting = %d", n)
 	}
 }
@@ -398,7 +399,7 @@ func TestSocketNonblockingConnect(t *testing.T) {
 	h := newSocketHarness(t)
 	l := socketEchoListener(t, "tcp", "127.0.0.1:0")
 	h.open(1, socketTCP)
-	if errno := h.connect(1, l.Addr().String(), 1); errno != errnoEINPROGRESS {
+	if errno := h.connect(1, l.Addr().String(), 1); errno != wasi.EINPROGRESS {
 		t.Fatalf("connect = %d, want EINPROGRESS", errno)
 	}
 	// A send waits for the connect to finish.
@@ -410,7 +411,7 @@ func TestSocketNonblockingConnect(t *testing.T) {
 	}
 
 	h.open(2, socketTCP)
-	if errno := h.connect(2, socketClosedPort(t), 1); errno != errnoEINPROGRESS {
+	if errno := h.connect(2, socketClosedPort(t), 1); errno != wasi.EINPROGRESS {
 		t.Fatalf("connect = %d, want EINPROGRESS", errno)
 	}
 	h.await(2, func(e *socketEntry) bool { return !e.connecting })
@@ -429,7 +430,7 @@ func TestSocketNonblockingConnect(t *testing.T) {
 	if v, _ := h.getopt(2, socketOptError); v != 0 {
 		t.Errorf("SO_ERROR read twice = %d", v)
 	}
-	if _, _, r := h.recv(2, 10, 0); r != -errnoENOTCONN {
+	if _, _, r := h.recv(2, 10, 0); r != -wasi.ENOTCONN {
 		t.Errorf("recv after SO_ERROR = %d, want -ENOTCONN", r)
 	}
 }
@@ -440,7 +441,7 @@ func TestSocketBlockingConnectRefused(t *testing.T) {
 	if errno := h.connect(1, socketClosedPort(t), 0); errno != socketECONNREFUSED {
 		t.Errorf("connect = %d, want ECONNREFUSED", errno)
 	}
-	if n := h.send(1, "x", "", 0); n != -errnoENOTCONN {
+	if n := h.send(1, "x", "", 0); n != -wasi.ENOTCONN {
 		t.Errorf("send = %d, want -ENOTCONN", n)
 	}
 }
@@ -450,7 +451,7 @@ func TestSocketConnectAfterRunEnds(t *testing.T) {
 	l := socketEchoListener(t, "tcp", "127.0.0.1:0")
 	h.run.cancel()
 	h.open(1, socketTCP)
-	if errno := h.connect(1, l.Addr().String(), 0); errno != errnoEINTR {
+	if errno := h.connect(1, l.Addr().String(), 0); errno != wasi.EINTR {
 		t.Errorf("connect = %d, want EINTR", errno)
 	}
 }
@@ -464,7 +465,7 @@ func TestSocketBlockingCallsWake(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 		close(h.run.intr)
 	}()
-	if _, _, r := h.recv(1, 10, 0); r != -errnoEINTR {
+	if _, _, r := h.recv(1, 10, 0); r != -wasi.EINTR {
 		t.Errorf("recv on interrupt = %d, want -EINTR", r)
 	}
 	go func() {
@@ -472,7 +473,7 @@ func TestSocketBlockingCallsWake(t *testing.T) {
 		h.run.cancel()
 	}()
 	h.run.intr = make(chan struct{})
-	if _, _, r := h.recv(1, 10, 0); r != -errnoEIO {
+	if _, _, r := h.recv(1, 10, 0); r != -wasi.EIO {
 		t.Errorf("recv once the run is over = %d, want -EIO", r)
 	}
 }
@@ -485,10 +486,10 @@ func TestSocketBindAndListen(t *testing.T) {
 		t.Fatalf("bind = %d", errno)
 	}
 	addr, _ := h.name(1, 0, 64)
-	if errno := h.bind(1, "127.0.0.1:0"); errno != errnoEINVAL {
+	if errno := h.bind(1, "127.0.0.1:0"); errno != wasi.EINVAL {
 		t.Errorf("bind twice = %d", errno)
 	}
-	if errno := h.x.listen(h.ctx, 1, 1); errno != errnoENOTSUP {
+	if errno := h.x.listen(h.ctx, 1, 1); errno != wasi.ENOTSUP {
 		t.Errorf("listen on UDP = %d", errno)
 	}
 	h.open(2, socketUDP)
@@ -497,7 +498,7 @@ func TestSocketBindAndListen(t *testing.T) {
 	}
 
 	h.open(3, socketUnix)
-	if errno := h.x.listen(h.ctx, 3, 1); errno != errnoEINVAL {
+	if errno := h.x.listen(h.ctx, 3, 1); errno != wasi.EINVAL {
 		t.Errorf("listen on an unbound Unix socket = %d", errno)
 	}
 	if name, errno := h.name(3, 0, 64); errno != 0 || name != "" {
@@ -521,7 +522,7 @@ func TestSocketName(t *testing.T) {
 	if name, _ := h.name(1, 0, 64); name != "0.0.0.0:0" {
 		t.Errorf("unbound TCP name = %q", name)
 	}
-	if _, errno := h.name(1, 1, 64); errno != errnoENOTCONN {
+	if _, errno := h.name(1, 1, 64); errno != wasi.ENOTCONN {
 		t.Errorf("peer of an unconnected socket = %d", errno)
 	}
 	h.open(2, socketUDP)
@@ -568,7 +569,7 @@ func TestSocketUDP(t *testing.T) {
 	if n := h.x.available(h.ctx, 1); n != 0 {
 		t.Errorf("available after recv = %d", n)
 	}
-	if _, _, r := h.recv(1, 100, socketMsgDontwait); r != -errnoEAGAIN {
+	if _, _, r := h.recv(1, 100, socketMsgDontwait); r != -wasi.EAGAIN {
 		t.Errorf("non-blocking recv with nothing queued = %d", r)
 	}
 	// sendto on a connected socket: to its peer, from its own port.
@@ -578,7 +579,7 @@ func TestSocketUDP(t *testing.T) {
 	if data, _, _ := h.recv(1, 100, 0); data != "echo: again" {
 		t.Errorf("recv = %q", data)
 	}
-	if n := h.send(1, "x", "127.0.0.1:9", 0); n != -errnoEISCONN {
+	if n := h.send(1, "x", "127.0.0.1:9", 0); n != -wasi.EISCONN {
 		t.Errorf("sendto another address = %d, want -EISCONN", n)
 	}
 	if e := h.entry(1); e.packet != nil {
@@ -587,10 +588,10 @@ func TestSocketUDP(t *testing.T) {
 
 	// Unbound: sendto binds it.
 	h.open(2, socketUDP)
-	if _, _, r := h.recv(2, 100, 0); r != -errnoENOTCONN {
+	if _, _, r := h.recv(2, 100, 0); r != -wasi.ENOTCONN {
 		t.Errorf("recv on an unbound socket = %d", r)
 	}
-	if n := h.send(2, "x", "", 0); n != -errnoEDESTADDRREQ {
+	if n := h.send(2, "x", "", 0); n != -wasi.EDESTADDRREQ {
 		t.Errorf("send without a peer = %d", n)
 	}
 	if n := h.send(2, "two", server.LocalAddr().String(), 0); n != 3 {
@@ -622,7 +623,7 @@ func TestSocketUDP(t *testing.T) {
 		h.tab.notify()
 		h.tab.mu.Unlock()
 	}()
-	if _, _, r := h.recv(2, 100, 0); r != -errnoEBADF {
+	if _, _, r := h.recv(2, 100, 0); r != -wasi.EBADF {
 		t.Errorf("recv on a closed socket = %d", r)
 	}
 }
@@ -658,7 +659,7 @@ func TestSocketUnixgram(t *testing.T) {
 		t.Errorf("recv = %q", data)
 	}
 	h.open(3, socketUnixgram)
-	if n := h.send(3, "x", path, 0); n != -errnoENOTSUP {
+	if n := h.send(3, "x", path, 0); n != -wasi.ENOTSUP {
 		t.Errorf("sendto from an unbound Unix socket = %d, want -ENOTSUP", n)
 	}
 	if n := h.send(1, "x", dir+"/none.sock", 0); n >= 0 {
@@ -669,16 +670,16 @@ func TestSocketUnixgram(t *testing.T) {
 func TestSocketSendErrors(t *testing.T) {
 	h := newSocketHarness(t)
 	h.open(1, socketTCP)
-	if n := h.send(1, "x", "", 0); n != -errnoENOTCONN {
+	if n := h.send(1, "x", "", 0); n != -wasi.ENOTCONN {
 		t.Errorf("send unconnected = %d", n)
 	}
-	if n := h.x.send(h.ctx, h.m, 1, 1<<16-1, 100, 0, 0, 0); n != -errnoEINVAL {
+	if n := h.x.send(h.ctx, h.m, 1, 1<<16-1, 100, 0, 0, 0); n != -wasi.EINVAL {
 		t.Errorf("send from outside memory = %d", n)
 	}
 	l := socketEchoListener(t, "tcp", "127.0.0.1:0")
 	h.connect(1, l.Addr().String(), 0)
 	h.entry(1).conn.Close()
-	if n := h.send(1, "x", "", 0); n != -errnoEPIPE {
+	if n := h.send(1, "x", "", 0); n != -wasi.EPIPE {
 		t.Errorf("send on a closed connection = %d, want -EPIPE", n)
 	}
 }
@@ -686,7 +687,7 @@ func TestSocketSendErrors(t *testing.T) {
 func TestSocketShutdown(t *testing.T) {
 	h := newSocketHarness(t)
 	h.open(1, socketTCP)
-	if errno := h.x.shutdown(h.ctx, 1, 3); errno != errnoENOTCONN {
+	if errno := h.x.shutdown(h.ctx, 1, 3); errno != wasi.ENOTCONN {
 		t.Errorf("shutdown unconnected = %d", errno)
 	}
 	l, err := net.Listen("tcp", "127.0.0.1:0")
@@ -707,7 +708,7 @@ func TestSocketShutdown(t *testing.T) {
 	if b, err := io.ReadAll(peer); err != nil || len(b) != 0 {
 		t.Errorf("peer read %q, %v", b, err)
 	}
-	if n := h.send(1, "x", "", 0); n != -errnoEPIPE {
+	if n := h.send(1, "x", "", 0); n != -wasi.EPIPE {
 		t.Errorf("send after SHUT_WR = %d, want -EPIPE", n)
 	}
 	if ev := h.entry(1).events(socketPollOut); ev&socketPollOut != 0 {
@@ -741,7 +742,7 @@ func TestSocketPipe(t *testing.T) {
 	if ev := h.entry(2).events(socketPollIn | socketPollOut); ev != socketPollOut {
 		t.Errorf("write end events = %d", ev)
 	}
-	if _, _, r := h.recv(2, 10, 0); r != -errnoEBADF {
+	if _, _, r := h.recv(2, 10, 0); r != -wasi.EBADF {
 		t.Errorf("recv on the write end = %d", r)
 	}
 	if name, errno := h.name(1, 1, 64); errno != 0 || name != "" {

@@ -5,22 +5,16 @@
 // is a Go net.Conn, net.Listener or net.PacketConn.
 package hostnet
 
-import "context"
+import (
+	"context"
 
-// Run is what the host functions need from the PHP instance calling them.
-type Run interface {
-	// Context is the run's context.
-	Context() context.Context
-	// Interruption is closed by the next interrupt, such as a timeout
-	// firing. A blocking call cut short by it returns EINTR, as a signal
-	// would make it.
-	Interruption() <-chan struct{}
-}
+	"github.com/mpyw/gophper/internal/wasi"
+)
 
 // interruptibleRunContext is canceled by the next interrupt or the end of the run.
 //
 //declscope:shared // socket.go dials and dns.go resolves with it
-func interruptibleRunContext(run Run) (context.Context, context.CancelFunc) {
+func interruptibleRunContext(run wasi.Run) (context.Context, context.CancelFunc) {
 	ctx, cancel := context.WithCancel(run.Context())
 	intr := run.Interruption()
 	go func() {

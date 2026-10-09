@@ -22,6 +22,7 @@ import (
 	"github.com/tetratelabs/wazero/api"
 
 	"github.com/mpyw/gophper/internal/hostnet"
+	"github.com/mpyw/gophper/internal/wasi"
 )
 
 // What a child fd stands for, and the open flags of a file. Keep in sync
@@ -57,7 +58,7 @@ type ProcessesHostPath func(path string) (host string, writable, ok bool)
 
 // Processes holds the children of one PHP instance.
 type Processes struct {
-	run      hostnet.Run
+	run      wasi.Run
 	sockets  *hostnet.Sockets
 	allowed  bool
 	hostPath ProcessesHostPath
@@ -80,7 +81,7 @@ type Processes struct {
 // binDir, if not empty, goes first in a child's PATH. It holds the
 // command "php", so that a script started with "#!/usr/bin/env php" runs on
 // this PHP too.
-func NewProcesses(run hostnet.Run, sockets *hostnet.Sockets, allowed bool, hostPath ProcessesHostPath, binDir string, stdin io.Reader, stdout, stderr io.Writer) *Processes {
+func NewProcesses(run wasi.Run, sockets *hostnet.Sockets, allowed bool, hostPath ProcessesHostPath, binDir string, stdin io.Reader, stdout, stderr io.Writer) *Processes {
 	return &Processes{
 		run:      run,
 		binDir:   binDir,
@@ -122,7 +123,7 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 ) int32 {
 	p := x.from(ctx)
 	if !p.allowed {
-		return errnoEPERM
+		return wasi.EPERM
 	}
 	mem := m.Memory()
 	read := func(ptr, n uint32) string {
@@ -135,7 +136,7 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 	cwd, _, ok := p.hostPath(read(cwdPtr, cwdLen))
 	if !ok {
 		// The working directory has no host directory behind it.
-		return errnoENOENT
+		return wasi.ENOENT
 	}
 
 	name, err := processResolve(path, search != 0, cwd, env)
@@ -165,7 +166,7 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 		case processChildHost:
 			hf, done, err := p.sockets.ChildFile(value)
 			if err != nil {
-				return errnoEBADF
+				return wasi.EBADF
 			}
 			release = append(release, done)
 			f = hf
@@ -178,15 +179,15 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 			case 2:
 				w = p.stderr.writer()
 			default:
-				return errnoEBADF
+				return wasi.EBADF
 			}
 		case processChildFile:
 			host, writable, ok := p.hostPath(fpath)
 			switch {
 			case !ok:
-				return errnoEBADF
+				return wasi.EBADF
 			case !writable && flags&processOpenWrite != 0:
-				return errnoEACCES
+				return wasi.EACCES
 			}
 			of, err := os.OpenFile(host, processOpenFlags(flags), 0o666)
 			if err != nil {
@@ -195,7 +196,7 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 			release = append(release, func() { of.Close() })
 			f = of
 		default:
-			return errnoEINVAL
+			return wasi.EINVAL
 		}
 		if f != nil {
 			r, w = f, f
@@ -211,7 +212,7 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 		default:
 			if f == nil {
 				// os/exec passes only files above stderr.
-				return errnoEBADF
+				return wasi.EBADF
 			}
 			for len(cmd.ExtraFiles) < int(fd)-2 {
 				cmd.ExtraFiles = append(cmd.ExtraFiles, nil)
@@ -263,7 +264,7 @@ func (x processExports) wait(ctx context.Context, m api.Module, pid, nohang int3
 		}
 		switch {
 		case !found:
-			return -errnoECHILD
+			return -wasi.ECHILD
 		case nohang != 0:
 			return 0
 		}
@@ -274,11 +275,11 @@ func (x processExports) wait(ctx context.Context, m api.Module, pid, nohang int3
 			p.mu.Lock()
 		case <-intr:
 			p.mu.Lock()
-			return -errnoEINTR
+			return -wasi.EINTR
 		case <-p.run.Context().Done():
 			// As with sockets: EINTR would make PHP retry forever.
 			p.mu.Lock()
-			return -errnoEIO
+			return -wasi.EIO
 		}
 	}
 }
@@ -291,14 +292,14 @@ func (x processExports) kill(ctx context.Context, pid, sig int32) int32 {
 	c := p.children[pid]
 	p.mu.Unlock()
 	if c == nil {
-		return errnoESRCH
+		return wasi.ESRCH
 	}
 	if sig == 0 {
 		return 0
 	}
 	s, ok := processHostSignal(sig)
 	if !ok {
-		return errnoEINVAL
+		return wasi.EINVAL
 	}
 	if err := c.cmd.Process.Signal(s); err != nil {
 		if errors.Is(err, os.ErrProcessDone) {

@@ -54,7 +54,7 @@ func guestRead(t *testing.T, m api.Module, off, n uint32) string {
 	return string(b)
 }
 
-// guestRun is a Run whose interrupts the test fires.
+// guestRun is a wasi.Run whose interrupts the test fires.
 //
 //declscope:shared // socket_test.go and dns_test.go
 type guestRun struct {

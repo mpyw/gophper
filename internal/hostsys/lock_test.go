@@ -10,11 +10,13 @@ import (
 	"path/filepath"
 	"syscall"
 	"testing"
+
+	"github.com/mpyw/gophper/internal/wasi"
 )
 
 // newSystemLocks returns the lock host functions of a fresh instance that
 // sees every host path as itself, except "/unmapped".
-func newSystemLocks(run memoryTestRun) (*System, systemLockExports) {
+func newSystemLocks(run guestRun) (*System, systemLockExports) {
 	s := NewSystem(run, func(path string) (string, bool, bool) {
 		return path, true, path != "/unmapped"
 	})
@@ -40,7 +42,7 @@ func TestSystemLock(t *testing.T) {
 	if err := os.WriteFile(file, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m := newMemoryModule(t)
+	m := newGuest(t)
 	ctx := context.Background()
 	lock := func(x systemLockExports, fd int32, path string, op int32) int32 {
 		ptr, n := putSystemPath(m, path)
@@ -48,16 +50,16 @@ func TestSystemLock(t *testing.T) {
 	}
 
 	t.Run("bad requests", func(t *testing.T) {
-		_, x := newSystemLocks(memoryTestRun{ctx: ctx})
+		_, x := newSystemLocks(guestRun{ctx: ctx})
 		for _, tt := range []struct {
 			name string
 			path string
 			op   int32
 			want int32
 		}{
-			{"neither shared nor exclusive", file, systemLockNonblock, errnoEINVAL},
-			{"no host file", "/unmapped", systemLockExclusive, errnoEINVAL},
-			{"missing file", file + ".missing", systemLockExclusive, errnoEBADF},
+			{"neither shared nor exclusive", file, systemLockNonblock, wasi.EINVAL},
+			{"no host file", "/unmapped", systemLockExclusive, wasi.EINVAL},
+			{"missing file", file + ".missing", systemLockExclusive, wasi.EBADF},
 			{"unlock without a lock", file, systemLockUnlock, 0},
 		} {
 			if got := lock(x, 3, tt.path, tt.op); got != tt.want {
@@ -70,23 +72,23 @@ func TestSystemLock(t *testing.T) {
 		holder := holdSystemLock(t, file)
 		intr := make(chan struct{})
 		cctx, cancel := context.WithCancel(ctx)
-		s, x := newSystemLocks(memoryTestRun{ctx: cctx, intr: intr})
-		if got := lock(x, 3, file, systemLockShared|systemLockNonblock); got != errnoEAGAIN {
+		s, x := newSystemLocks(guestRun{ctx: cctx, intr: intr})
+		if got := lock(x, 3, file, systemLockShared|systemLockNonblock); got != wasi.EAGAIN {
 			t.Errorf("non-blocking: errno %d, want EAGAIN", got)
 		}
 		close(intr)
-		if got := lock(x, 3, file, systemLockExclusive); got != errnoEINTR {
+		if got := lock(x, 3, file, systemLockExclusive); got != wasi.EINTR {
 			t.Errorf("interrupted: errno %d, want EINTR", got)
 		}
-		s.run = memoryTestRun{ctx: cctx, intr: make(chan struct{})}
+		s.run = guestRun{ctx: cctx, intr: make(chan struct{})}
 		cancel()
-		if got := lock(x, 3, file, systemLockExclusive); got != errnoEIO {
+		if got := lock(x, 3, file, systemLockExclusive); got != wasi.EIO {
 			t.Errorf("after the run: errno %d, want EIO", got)
 		}
 
 		// Once the holder lets go, the same fd gets the lock, and Close
 		// releases it.
-		s.run = memoryTestRun{ctx: ctx, intr: make(chan struct{})}
+		s.run = guestRun{ctx: ctx, intr: make(chan struct{})}
 		syscall.Flock(int(holder.Fd()), syscall.LOCK_UN)
 		if got := lock(x, 3, file, systemLockExclusive); got != 0 {
 			t.Fatalf("free: errno %d, want 0", got)
@@ -116,7 +118,7 @@ func TestSystemLock(t *testing.T) {
 			syscall.Flock(int(probe.Fd()), syscall.LOCK_UN)
 			return true
 		}
-		_, x := newSystemLocks(memoryTestRun{ctx: ctx})
+		_, x := newSystemLocks(guestRun{ctx: ctx})
 		if lock(x, 3, file, systemLockExclusive) != 0 || free() {
 			t.Fatal("fd 3 did not lock")
 		}

@@ -20,13 +20,38 @@ import (
 // runSignals runs code and sends sig once the script prints "ready".
 func runSignals(t *testing.T, code string, sig os.Signal) (string, int) {
 	t.Helper()
+	return runSignalsEvery(t, code, sig, 0)
+}
+
+// runSignalsEvery is runSignals, but with every above zero, it sends sig
+// again at that interval until the run ends. A test whose script must be
+// blocked when the signal comes needs it: "ready" is printed just before
+// the script blocks, so the first signal may arrive too early.
+func runSignalsEvery(t *testing.T, code string, sig os.Signal, every time.Duration) (string, int) {
+	t.Helper()
 	ch := make(chan os.Signal, 1)
 	out := &signalBuffer{ready: make(chan struct{})}
+	done := make(chan struct{})
+	defer close(done)
 	go func() {
 		select {
 		case <-out.ready:
-			ch <- sig
 		case <-time.After(30 * time.Second):
+			return
+		}
+		for {
+			select {
+			case ch <- sig:
+			default:
+			}
+			if every <= 0 {
+				return
+			}
+			select {
+			case <-time.After(every):
+			case <-done:
+				return
+			}
 		}
 	}()
 	exit, err := newTestEngine(t).RunCLI(context.Background(), gophper.Options{
@@ -117,15 +142,17 @@ func TestSignal(t *testing.T) {
 		}
 	})
 	t.Run("sigwaitinfo interrupted", func(t *testing.T) {
-		// Another signal, with a handler, cuts the wait short.
-		out, exit := runSignals(t, `
+		// Another signal, with a handler, cuts the wait short. It is sent
+		// until the run ends: one that came before the wait began would run
+		// the handler and leave the wait with nothing to end it.
+		out, exit := runSignalsEvery(t, `
 			pcntl_async_signals(true);
-			pcntl_signal(SIGUSR2, fn($n) => print("handler $n\n"));
+			pcntl_signal(SIGUSR2, function ($n) { $GLOBALS["handled"] = $n; });
 			pcntl_sigprocmask(SIG_BLOCK, [SIGUSR1]);
 			echo "ready\n";
 			var_export(@pcntl_sigwaitinfo([SIGUSR1], $info));
-			echo ' ', pcntl_strerror(pcntl_get_last_error()), "\n";`, syscall.SIGUSR2)
-		if exit != 0 || out != "ready\nhandler 12\nfalse Interrupted system call\n" {
+			echo ' ', pcntl_strerror(pcntl_get_last_error()), ' handled ', $GLOBALS["handled"] ?? 0, "\n";`, syscall.SIGUSR2, 100*time.Millisecond)
+		if exit != 0 || out != "ready\nfalse Interrupted system call handled 12\n" {
 			t.Errorf("exit %d\n%s", exit, out)
 		}
 	})

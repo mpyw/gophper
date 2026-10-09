@@ -110,10 +110,10 @@ func (i *engineInstance) locate(m api.Module) error {
 	return err
 }
 
-// Context implements hostnet.Run.
+// Context implements wasi.Run.
 func (i *engineInstance) Context() context.Context { return i.ctx }
 
-// Interruption implements hostnet.Run.
+// Interruption implements wasi.Run.
 func (i *engineInstance) Interruption() <-chan struct{} {
 	i.mu.Lock()
 	defer i.mu.Unlock()

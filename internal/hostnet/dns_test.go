@@ -7,6 +7,8 @@ import (
 	"net"
 	"strings"
 	"testing"
+
+	"github.com/mpyw/gophper/internal/wasi"
 )
 
 const (
@@ -14,8 +16,8 @@ const (
 	dnsTestOutOff  = 1024
 )
 
-func newDNSExports(run Run) dnsExports {
-	return dnsExports{from: func(context.Context) Run { return run }}
+func newDNSExports(run wasi.Run) dnsExports {
+	return dnsExports{from: func(context.Context) wasi.Run { return run }}
 }
 
 func TestDNSReverse(t *testing.T) {
