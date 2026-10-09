@@ -233,10 +233,15 @@ func TestSocketUnixRelative(t *testing.T) {
 		chdir(%q);
 		$s = stream_socket_server("unix://rel.sock", $errno, $errstr) or die("$errno $errstr");
 		$c = stream_socket_client("unix://rel.sock", $errno, $errstr, 5) or die("$errno $errstr");
-		echo file_exists(%q) ? "bound\n" : "missing\n";
-	`, gophper.HostToGuest(dir), gophper.HostToGuest(filepath.Join(dir, "rel.sock"))))
-	if code != 0 || out != "bound\n" {
+		echo "connected\n";
+	`, gophper.HostToGuest(dir)))
+	if code != 0 || out != "connected\n" {
 		t.Errorf("exit %d\n%s", code, out)
+	}
+	// Checked from the host: on Windows, a socket file is a reparse point
+	// that WASI does not report.
+	if _, err := os.Lstat(filepath.Join(dir, "rel.sock")); err != nil {
+		t.Errorf("not bound in the directory PHP changed to: %v", err)
 	}
 }
 
