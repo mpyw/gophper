@@ -61,6 +61,7 @@ type Processes struct {
 	sockets  *hostnet.Sockets
 	allowed  bool
 	hostPath ProcessesHostPath
+	binDir   string
 	stdin    *processGuardedReader
 	stdout   *processGuardedWriter
 	stderr   *processGuardedWriter
@@ -75,9 +76,14 @@ type Processes struct {
 // every spawn fails with EPERM. stdin, stdout and stderr are the instance's
 // own. A child given one of them gets it until Close, even when it outlives
 // the instance.
-func NewProcesses(run hostnet.Run, sockets *hostnet.Sockets, allowed bool, hostPath ProcessesHostPath, stdin io.Reader, stdout, stderr io.Writer) *Processes {
+//
+// binDir, if not empty, goes first in a child's PATH. It holds the
+// command "php", so that a script started with "#!/usr/bin/env php" runs on
+// this PHP too.
+func NewProcesses(run hostnet.Run, sockets *hostnet.Sockets, allowed bool, hostPath ProcessesHostPath, binDir string, stdin io.Reader, stdout, stderr io.Writer) *Processes {
 	return &Processes{
 		run:      run,
+		binDir:   binDir,
 		sockets:  sockets,
 		allowed:  allowed,
 		hostPath: hostPath,
@@ -125,7 +131,7 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 	}
 	path := read(pathPtr, pathLen)
 	argv := processSplitNUL(read(argvPtr, argvLen))
-	env := processSplitNUL(read(envpPtr, envpLen))
+	env := processWithBinDir(processSplitNUL(read(envpPtr, envpLen)), p.binDir)
 	cwd, _, ok := p.hostPath(read(cwdPtr, cwdLen))
 	if !ok {
 		// The working directory has no host directory behind it.
@@ -303,7 +309,23 @@ func (x processExports) kill(ctx context.Context, pid, sig int32) int32 {
 	return 0
 }
 
-// resolve finds the program, as execve or execvp would.
+// processWithBinDir puts dir first in env's PATH.
+func processWithBinDir(env []string, dir string) []string {
+	if dir == "" {
+		return env
+	}
+	sep := string(filepath.ListSeparator)
+	for i, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+			env[i] = "PATH=" + dir + sep + v
+			return env
+		}
+	}
+	// No PATH: the default a shell would use, after dir.
+	return append(env, "PATH="+dir+sep+"/usr/local/bin:/usr/bin:/bin")
+}
+
+// processResolve finds the program, as execve or execvp would.
 func processResolve(path string, search bool, cwd string, env []string) (string, error) {
 	if strings.Contains(path, "/") || !search {
 		if !filepath.IsAbs(path) {

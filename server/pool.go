@@ -52,6 +52,10 @@ type pool struct {
 	active, total atomic.Int64
 	//declscope:private
 	started time.Time
+	// workers is nil when each request starts its own instance.
+	//
+	//declscope:private
+	workers *poolWorkers
 }
 
 // errPoolBusy reports a request that waited MaxWaitTime for an instance.
@@ -72,6 +76,10 @@ var poolINI = []string{
 	// startup, which putenv() cannot change.
 	"variables_order=GPCS",
 }
+
+// poolMaxRequests is how many requests a worker serves before it is
+// replaced, as php-cgi's own PHP_FCGI_MAX_REQUESTS default.
+const poolMaxRequests = 500
 
 // poolOpcacheDir is where OpcacheDir is mounted.
 const poolOpcacheDir = "/var/cache/gophper/opcache"
@@ -184,6 +192,19 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 	if p.accessLog == nil {
 		p.accessLog = io.Discard
 	}
+	if !cfg.NoWorkers {
+		// Only this user may reach the workers' sockets.
+		dir, err := os.MkdirTemp("", "gophper-w")
+		if err != nil {
+			os.RemoveAll(iniDir)
+			return nil, err
+		}
+		maxRequests := cfg.MaxRequests
+		if maxRequests <= 0 {
+			maxRequests = poolMaxRequests
+		}
+		p.workers = &poolWorkers{dir: dir, maxRequests: maxRequests, all: map[*poolWorker]struct{}{}}
+	}
 	return p, nil
 }
 
@@ -236,6 +257,9 @@ func (p *pool) run(ctx context.Context, vars map[string]string, stdin io.Reader,
 	p.active.Add(1)
 	p.total.Add(1)
 	defer p.active.Add(-1)
+	if p.workers != nil {
+		return p.poolServe(ctx, vars, stdin, stdout, stderr)
+	}
 
 	env := slices.Clone(p.env)
 	for k, v := range vars {
@@ -283,5 +307,9 @@ func (p *pool) logAccess(remote, method, uri, proto string, status int, size int
 
 //declscope:shared // http.go and fastcgi.go
 func (p *pool) close() error {
+	if p.workers != nil {
+		p.poolStopWorkers()
+		os.RemoveAll(p.workers.dir)
+	}
 	return os.RemoveAll(p.iniDir)
 }

@@ -27,6 +27,7 @@ The PHP binaries come from [gophper-wasm](https://github.com/mpyw/gophper-wasm),
 | `gophper fcgi [options]` | A FastCGI server, like php-fpm |
 | `gophper caddy [caddy arguments]` | Caddy with gophper built in. Automatic HTTPS. |
 | `gophper extension list` / `install NAME...` | Lists or installs the extensions that come with gophper. See [Extensions](#extensions). |
+| `gophper licenses` | Prints the licenses of gophper and everything in it |
 
 > [!TIP]
 > A symlink named `php` that points to `gophper` behaves like `gophper php`.
@@ -66,7 +67,9 @@ The CLI mounts the host file system at `/`. It starts in the current directory.
 gophper serve --root public --listen 127.0.0.1:8080
 ```
 
-Each request runs in a fresh PHP instance. Requests are routed like Caddy's `php_server`:
+Workers serve the requests, as php-fpm's children do.
+Each is a long-lived PHP instance that serves one request at a time, and PHP resets its state between them.
+Requests are routed like Caddy's `php_server`:
 
 | Request | Result |
 | --- | --- |
@@ -139,6 +142,8 @@ location ~ \.php(/|$) {
 | `--mount DIR[:ro]` | A directory PHP may access, at the same path. Repeatable. Default: the current directory | |
 | `--temp-dir DIR` | Mounted at `/tmp` inside PHP. Default: the system's | |
 | `--no-processes` | Stops PHP from starting host programs (`proc_open`, `exec` and the rest) | `disable_functions` |
+| `--no-workers` | Starts a fresh PHP instance for each request | |
+| `--max-requests N` | Requests a worker serves before it is replaced. Default: 500 | `pm.max_requests` |
 | `--opcache-dir DIR` | Where opcache keeps compiled scripts between requests. Default: the user cache directory | |
 | `--no-opcache` | Leaves opcache off | `opcache.enable=0` |
 | `--concurrency N` | PHP instances at once. Default: the number of CPUs | `pm.max_children` |
@@ -188,6 +193,8 @@ example.com {
 | `root`, `router`, `index`, `split_path`, `temp_dir`, `concurrency`, `max_wait_time`, `env` | The `serve` options |
 | `processes off` | `--no-processes` |
 | `opcache DIR \| off` | `--opcache-dir`, or `--no-opcache` |
+| `workers off` | `--no-workers` |
+| `max_requests N` | `--max-requests` |
 | `mount DIR [ro]` | `--mount DIR[:ro]` |
 | `front_controller FILE \| off` | `--front-controller` |
 | `file_server off` | `--no-static`, as in FrankenPHP |
@@ -238,7 +245,10 @@ These come with gophper:
 | Extension | What it adds |
 | --- | --- |
 | `gd` | Images, with PNG and JPEG |
-| `intl` | ICU 78. `extension install intl` also writes ICU's data, 33 MB, beside it. |
+| `intl` | ICU 78, with English and Japanese. `extension install intl` also writes ICU's data, 13 MB, beside it. |
+| `bz2` | bzip2 |
+| `gmp` | GMP, under the LGPL. See [License](#license). |
+| `redis` | phpredis 6.3, with `session.save_handler=redis` |
 | `sodium` | libsodium |
 | `zip` | `ZipArchive`, with AES encryption |
 | `dl_test` | php-src's extension for testing `dl()` |
@@ -323,9 +333,8 @@ Most of it is wazero validating the 16 MB binary, which it does even with the ca
 | `dns_get_record`, `checkdnsrr`, `getmxrr` | Works. The host queries the name servers in `/etc/resolv.conf`. |
 | Other built-in extensions | bcmath, calendar, ctype, exif, fileinfo, filter, iconv, mbstring, Phar, posix, session, tokenizer |
 | Loading extensions at runtime | Works. See [Extensions](#extensions). |
-| `curl` | Built in, with HTTPS through the same OpenSSL and CA bundle |
-| `gd`, `intl`, `sodium`, `zip` | Load at runtime. See [Extensions](#extensions). |
-| Other extensions (`pgsql`, `redis`, `imagick`, ...) | Not built yet |
+| `curl`, `pgsql` | Built in. curl uses the same OpenSSL and CA bundle. |
+| `bz2`, `gd`, `gmp`, `intl`, `redis`, `sodium`, `zip` | Load at runtime. See [Extensions](#extensions). |
 
 > [!NOTE]
 > A script blocked reading a socket is not stopped by `max_execution_time`.
@@ -341,18 +350,28 @@ On an Apple Silicon Mac:
 
 gophper is about 3.3 times slower. There is no JIT.
 
-FastCGI, for a small JSON page with 4 workers:
+A small JSON page with `gophper serve`, measured with `ab`:
 
-| Load | Time per request |
-| --- | --- |
-| One request at a time, keep-alive | 3.3 ms |
-| Parallel | 1.1 ms (about 930 requests per second) |
-
-Each request runs in a fresh PHP instance.
+| Mode | One request at a time | 8 at once, 4 instances |
+| --- | --- | --- |
+| Workers (the default) | 0.6 ms | 8,700 requests per second |
+| A fresh instance per request (`--no-workers`) | 12 ms | 290 requests per second |
 
 Laravel 13's welcome page with `gophper serve`, one request at a time:
 
-| opcache | Time per request |
+| Mode | Time per request |
 | --- | --- |
-| Off (`--no-opcache`) | 160 ms |
-| File cache (the default) | 100 ms |
+| Workers and opcache's file cache (the default) | 84 ms |
+| Fresh instances, with the file cache | 100 ms |
+| Fresh instances, without opcache | 160 ms |
+
+## License
+
+gophper's own code is under the [MIT License](LICENSE).
+
+A gophper binary also contains PHP and the libraries built into it, from gophper-wasm, and Go modules.
+Each keeps its own license. `gophper licenses` prints them all, with the list of Go modules.
+
+> [!IMPORTANT]
+> To distribute a gophper binary, pass on what `gophper licenses` prints.
+> `gmp.so` links GMP under the LGPL. gophper-wasm's README says what that asks of a distributor.

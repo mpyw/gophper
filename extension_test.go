@@ -1,11 +1,16 @@
 package gophper_test
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 
 	phpext "github.com/mpyw/gophper-wasm/ext"
@@ -128,12 +133,93 @@ func TestExtensionBundled(t *testing.T) {
 }
 
 // TestExtensionIntl formats with ICU and its data, which comes beside intl.so.
+// The data has English and Japanese only.
 func TestExtensionIntl(t *testing.T) {
 	out, code := runExtension(t, newExtensionEngine(t), "-d", "extension=intl", "-r", `
-		echo (new NumberFormatter("de_DE", NumberFormatter::CURRENCY))->formatCurrency(1234.5, "EUR"), "\n";
+		echo (new NumberFormatter("ja_JP", NumberFormatter::CURRENCY))->formatCurrency(1234.5, "JPY"), "\n";
 		echo MessageFormatter::formatMessage("en_US", "{0, plural, one{# file} other{# files}}", [3]), "\n";
 		echo Normalizer::normalize("e\u{301}") === "\u{e9}" ? "normalized" : "not normalized", "\n";`)
-	if want := "1.234,50\u00a0€\n3 files\nnormalized\n"; code != 0 || out != want {
+	if want := "￥1,234\n3 files\nnormalized\n"; code != 0 || out != want {
 		t.Errorf("exit %d\n%q", code, out)
+	}
+}
+
+// TestExtensionRedis talks to a fake Redis that speaks enough RESP for the
+// client and for session.save_handler=redis.
+func TestExtensionRedis(t *testing.T) {
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { l.Close() })
+	// Shared by every connection, as in a real server.
+	var data sync.Map
+	go func() {
+		for {
+			conn, err := l.Accept()
+			if err != nil {
+				return
+			}
+			go redisFake(conn, &data)
+		}
+	}()
+	out, code := runExtension(t, newExtensionEngine(t), "-d", "extension=redis", "-r", fmt.Sprintf(`
+		$r = new Redis();
+		$r->connect("127.0.0.1", %d);
+		var_dump($r->ping(), $r->set("k", "v"), $r->get("k"), $r->get("missing"));`, l.Addr().(*net.TCPAddr).Port))
+	if want := "bool(true)\nbool(true)\nstring(1) \"v\"\nbool(false)\n"; code != 0 || out != want {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+
+	// session.save_handler=redis: one run writes the session, the next reads it.
+	save := fmt.Sprintf("tcp://127.0.0.1:%d", l.Addr().(*net.TCPAddr).Port)
+	session := []string{"-d", "extension=redis", "-d", "session.save_handler=redis", "-d", "session.save_path=" + save,
+		"-d", "session.use_cookies=0", "-d", "session.use_strict_mode=0"}
+	_, code = runExtension(t, newExtensionEngine(t), append(session, "-r", `session_id("abc"); session_start(); $_SESSION["n"] = 42;`)...)
+	out, code2 := runExtension(t, newExtensionEngine(t), append(session, "-r", `session_id("abc"); session_start(); var_dump($_SESSION["n"] ?? null);`)...)
+	if code != 0 || code2 != 0 || out != "int(42)\n" {
+		t.Errorf("session: exit %d, %d\n%s", code, code2, out)
+	}
+}
+
+func redisFake(conn net.Conn, data *sync.Map) {
+	defer conn.Close()
+	r := bufio.NewReader(conn)
+	for {
+		line, err := r.ReadString('\n')
+		if err != nil {
+			return
+		}
+		n, _ := strconv.Atoi(strings.TrimSpace(line[1:]))
+		args := make([]string, n)
+		for i := range args {
+			r.ReadString('\n')
+			arg, _ := r.ReadString('\n')
+			args[i] = strings.TrimRight(arg, "\r\n")
+		}
+		switch strings.ToUpper(args[0]) {
+		case "PING":
+			fmt.Fprint(conn, "+PONG\r\n")
+		case "SET":
+			data.Store(args[1], args[2])
+			fmt.Fprint(conn, "+OK\r\n")
+		case "SETEX":
+			data.Store(args[1], args[3])
+			fmt.Fprint(conn, "+OK\r\n")
+		case "EXPIRE":
+			if _, ok := data.Load(args[1]); ok {
+				fmt.Fprint(conn, ":1\r\n")
+			} else {
+				fmt.Fprint(conn, ":0\r\n")
+			}
+		case "GET":
+			if v, ok := data.Load(args[1]); ok {
+				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(v.(string)), v)
+			} else {
+				fmt.Fprint(conn, "$-1\r\n")
+			}
+		default:
+			fmt.Fprint(conn, "-ERR unknown command\r\n")
+		}
 	}
 }

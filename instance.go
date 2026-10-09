@@ -52,7 +52,7 @@ type engineInstance struct {
 	interrupted chan struct{}
 }
 
-func newEngineInstance(ctx context.Context, cancel context.CancelFunc, extensions *dylink.Cache, opts Options) *engineInstance {
+func newEngineInstance(ctx context.Context, cancel context.CancelFunc, extensions *dylink.Cache, binDir string, opts Options) *engineInstance {
 	inst := &engineInstance{ctx: ctx, cancel: cancel, interrupted: make(chan struct{}), linker: dylink.NewLinker(extensions)}
 	inst.signals.changed = make(chan struct{})
 	inst.sockets = hostnet.NewSockets(inst)
@@ -60,7 +60,7 @@ func newEngineInstance(ctx context.Context, cancel context.CancelFunc, extension
 	if hostPath == nil {
 		hostPath = func(string) (string, bool, bool) { return "", false, false }
 	}
-	inst.processes = hostproc.NewProcesses(inst, inst.sockets, opts.Processes, hostproc.ProcessesHostPath(hostPath), opts.Stdin, opts.Stdout, opts.Stderr)
+	inst.processes = hostproc.NewProcesses(inst, inst.sockets, opts.Processes, hostproc.ProcessesHostPath(hostPath), binDir, opts.Stdin, opts.Stdout, opts.Stderr)
 	inst.system = hostsys.NewSystem(inst, hostsys.SystemHostPath(hostPath))
 	fns := make(map[string]hostfn.Function, len(opts.Functions))
 	for name, fn := range opts.Functions {

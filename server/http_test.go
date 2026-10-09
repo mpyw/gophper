@@ -24,6 +24,7 @@ func startHTTP(t *testing.T) *httptest.Server {
 	return startHTTPWith(t, func(*server.HTTPConfig) {})
 }
 
+//declscope:shared // worker_test.go
 func startHTTPWith(t *testing.T, configure func(*server.HTTPConfig)) *httptest.Server {
 	t.Helper()
 	engine, err := gophper.NewEngine(context.Background(), gophper.DefaultEngineConfig())
@@ -48,6 +49,7 @@ func startHTTPWith(t *testing.T, configure func(*server.HTTPConfig)) *httptest.S
 // noRedirect returns the first response, without following Location.
 var noRedirect = &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 
+//declscope:shared // worker_test.go
 func get(t *testing.T, url string) (*http.Response, string) {
 	t.Helper()
 	res, err := noRedirect.Get(url)

@@ -93,6 +93,7 @@ linters:
             - github.com/mpyw/gophper$
             - github.com/mpyw/gophper/caddy$
             - github.com/mpyw/gophper/server$
+            - github.com/mpyw/gophper-wasm$
             - github.com/mpyw/gophper-wasm/ext$
 
         # The Caddy module: gophper's public API inside Caddy.

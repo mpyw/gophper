@@ -35,6 +35,13 @@ type PHPConfig struct {
 	OpcacheDir string
 	// NoOpcache leaves opcache off.
 	NoOpcache bool
+	// NoWorkers starts a fresh PHP instance for each request. By default, a
+	// worker serves many requests, one at a time, as a php-fpm child does,
+	// and PHP resets its state between them.
+	NoWorkers bool
+	// MaxRequests is how many requests a worker serves before it is
+	// replaced (php-fpm's pm.max_requests). Zero means 500.
+	MaxRequests int
 	// NoProcesses stops PHP from starting host programs (proc_open, exec
 	// and the rest). Like php-fpm, PHP may start them by default. A child
 	// runs outside the mounts, with the rights of the server.

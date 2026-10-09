@@ -16,11 +16,13 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io/fs"
 	"net"
 	"net/http"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
@@ -29,6 +31,7 @@ import (
 
 	caddycmd "github.com/caddyserver/caddy/v2/cmd"
 	_ "github.com/caddyserver/caddy/v2/modules/standard"
+	phpwasm "github.com/mpyw/gophper-wasm"
 	phpext "github.com/mpyw/gophper-wasm/ext"
 	"github.com/tetratelabs/wazero"
 	"github.com/urfave/cli/v3"
@@ -117,6 +120,11 @@ func newRootCommand() *cli.Command {
 				Action:          caddyAction,
 			},
 			{
+				Name:   "licenses",
+				Usage:  "print the licenses of gophper and everything it contains",
+				Action: licensesAction,
+			},
+			{
 				Name:  "extension",
 				Usage: "manage the extensions that come with gophper",
 				Commands: []*cli.Command{
@@ -159,6 +167,16 @@ func phpFlags() []cli.Flag {
 			Name:    "mount",
 			Usage:   "directory PHP may access, at the same path inside PHP; DIR or DIR:ro (repeatable, default: the current directory)",
 			Sources: env("MOUNT"),
+		},
+		&cli.BoolFlag{
+			Name:    "no-workers",
+			Usage:   "start a fresh PHP instance for each request, instead of reusing workers as php-fpm does",
+			Sources: env("NO_WORKERS"),
+		},
+		&cli.IntFlag{
+			Name:    "max-requests",
+			Usage:   "requests a worker serves before it is replaced, like php-fpm's pm.max_requests (0 = 500)",
+			Sources: env("MAX_REQUESTS"),
 		},
 		&cli.StringFlag{
 			Name:    "opcache-dir",
@@ -380,6 +398,8 @@ func phpConfig(cmd *cli.Command) (server.PHPConfig, func(), error) {
 		TempDir:     cmd.String("temp-dir"),
 		NoProcesses: cmd.Bool("no-processes"),
 		OpcacheDir:  cmd.String("opcache-dir"),
+		NoWorkers:   cmd.Bool("no-workers"),
+		MaxRequests: int(cmd.Int("max-requests")),
 		NoOpcache:   cmd.Bool("no-opcache"),
 		Concurrency: int(cmd.Int("concurrency")),
 		MaxWaitTime: cmd.Duration("max-wait-time"),
@@ -619,6 +639,30 @@ func fcgiAction(ctx context.Context, cmd *cli.Command) error {
 }
 
 // caddyAction hands the arguments to Caddy's own command line. It exits.
+// licensesAction prints what a distributor of gophper must pass on.
+func licensesAction(_ context.Context, cmd *cli.Command) error {
+	w := cmd.Root().Writer
+	fmt.Fprintf(w, "gophper\n\n%s\n", gophper.License)
+	entries, err := fs.ReadDir(phpwasm.Licenses, ".")
+	if err != nil {
+		return err
+	}
+	for _, e := range entries {
+		b, err := fs.ReadFile(phpwasm.Licenses, e.Name())
+		if err != nil {
+			return err
+		}
+		fmt.Fprintf(w, "\n---- %s ----\n\n%s\n", strings.TrimSuffix(e.Name(), ".txt"), b)
+	}
+	if info, ok := debug.ReadBuildInfo(); ok {
+		fmt.Fprint(w, "\n---- Go modules ----\n\nEach is under the license in its source.\n\n")
+		for _, m := range info.Deps {
+			fmt.Fprintf(w, "%s %s\n", m.Path, m.Version)
+		}
+	}
+	return nil
+}
+
 func extensionListAction(_ context.Context, cmd *cli.Command) error {
 	for _, name := range phpext.Names() {
 		fmt.Fprintln(cmd.Root().Writer, name)

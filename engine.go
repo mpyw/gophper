@@ -198,7 +198,12 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	inst := newEngineInstance(ctx, cancel, e.dylink, opts)
+	// PHPBinary's directory holds "php" for child processes too.
+	binDir := ""
+	if e.phpBinary != "" {
+		binDir = filepath.Dir(e.phpBinary)
+	}
+	inst := newEngineInstance(ctx, cancel, e.dylink, binDir, opts)
 	defer inst.sockets.Close()
 	defer inst.processes.Close()
 	defer inst.system.Close()

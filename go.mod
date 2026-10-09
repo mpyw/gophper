@@ -6,7 +6,7 @@ require (
 	github.com/caddyserver/caddy/v2 v2.11.7
 	github.com/caddyserver/certmagic v0.25.6
 	github.com/dustin/go-humanize v1.1.0
-	github.com/mpyw/gophper-wasm v0.4.0
+	github.com/mpyw/gophper-wasm v0.5.0
 	github.com/spf13/cobra v1.10.2
 	github.com/tetratelabs/wazero v1.12.0
 	github.com/urfave/cli/v3 v3.14.0

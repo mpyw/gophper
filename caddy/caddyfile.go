@@ -69,6 +69,21 @@ func (h *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 					h.OpcacheDir = v
 				}
 			}
+		case "workers":
+			var v string
+			if v, err = one(); err == nil {
+				if v != "off" {
+					return d.Errf("workers: want off, got %q", v)
+				}
+				h.NoWorkers = true
+			}
+		case "max_requests":
+			var v string
+			if v, err = one(); err == nil {
+				if h.MaxRequests, err = strconv.Atoi(v); err != nil {
+					return d.Errf("max_requests: %v", err)
+				}
+			}
 		case "processes":
 			var v string
 			if v, err = one(); err == nil {

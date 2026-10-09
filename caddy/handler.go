@@ -62,6 +62,10 @@ type Handler struct {
 	OpcacheDir string `json:"opcache_dir,omitempty"`
 	// NoOpcache leaves opcache off.
 	NoOpcache bool `json:"no_opcache,omitempty"`
+	// NoWorkers starts a fresh PHP instance for each request.
+	NoWorkers bool `json:"no_workers,omitempty"`
+	// MaxRequests is how many requests a worker serves. Default: 500.
+	MaxRequests int `json:"max_requests,omitempty"`
 	// MaxWaitTime is how long a request waits for a free instance before 503.
 	MaxWaitTime caddy.Duration `json:"max_wait_time,omitempty"`
 	// INI holds php.ini lines such as "max_execution_time=30".
@@ -114,6 +118,8 @@ func (h *Handler) Provision(ctx caddy.Context) error {
 			NoProcesses: h.NoProcesses,
 			OpcacheDir:  h.OpcacheDir,
 			NoOpcache:   h.NoOpcache,
+			NoWorkers:   h.NoWorkers,
+			MaxRequests: h.MaxRequests,
 			MaxWaitTime: time.Duration(h.MaxWaitTime),
 			INI:         h.INI,
 			Env:         h.Env,
