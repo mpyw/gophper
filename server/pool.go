@@ -255,28 +255,32 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 		}
 		p.workers = &poolWorkers{dir: dir, maxRequests: maxRequests, all: map[*poolWorker]struct{}{}}
 	}
-	if cfg.MemoryLimit > 0 {
-		if err := p.checkMemoryLimit(); err != nil {
-			return nil, errors.Join(err, p.close())
-		}
+	if err := p.checkStart(); err != nil {
+		return nil, errors.Join(err, p.close())
 	}
 	return p, nil
 }
 
-// checkMemoryLimit starts php-cgi -v as each instance starts: its php.ini
-// and mounts, under the cap. Opcache's shared memory, 64 MB for a worker,
-// may not fit, and then every request would fail.
-func (p *pool) checkMemoryLimit() error {
+// checkStart starts php-cgi -v as each instance starts: its php.ini and
+// mounts, under its memory cap. Opcache's shared memory, 64 MB for a
+// worker, may not fit the cap, and then every request would fail. It also
+// compiles php-cgi.wasm, which on a cold cache took most of a worker's
+// time to listen.
+func (p *pool) checkStart() error {
 	var out bytes.Buffer
 	code, err := p.engine.RunCGI(context.Background(), gophper.Options{
 		Args: []string{"-v"}, Env: p.env, Stdout: &out, Stderr: &out,
 		FS: p.fs, HostPath: p.hostPath, MemoryLimit: p.memoryLimit,
 	})
+	what := "php-cgi"
+	if p.memoryLimit > 0 {
+		what = fmt.Sprintf("memory limit %d", p.memoryLimit)
+	}
 	switch {
 	case err != nil:
-		return fmt.Errorf("memory limit %d: %w", p.memoryLimit, err)
+		return fmt.Errorf("%s: %w", what, err)
 	case code != 0:
-		return fmt.Errorf("memory limit %d: PHP cannot start under it: %s", p.memoryLimit, strings.TrimSpace(out.String()))
+		return fmt.Errorf("%s: PHP cannot start: %s", what, strings.TrimSpace(out.String()))
 	}
 	return nil
 }
