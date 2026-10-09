@@ -168,6 +168,9 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 				return errnoFrom(err)
 			}
 		}
+		if !processBatchSafe(name, argv) {
+			return wasi.EINVAL
+		}
 		cmd = &exec.Cmd{Path: name, Args: argv}
 		if len(cmd.Args) == 0 {
 			cmd.Args = []string{path}
@@ -176,6 +179,9 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 	cmd.Env, cmd.Dir = env, cwd
 
 	var release []func()
+	// feeds are the write ends of the pipes a child reads, closed once it
+	// exits.
+	var feeds []*os.File
 	defer func() {
 		for _, r := range release {
 			r()
@@ -228,6 +234,25 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 		if f != nil {
 			r, w = f, f
 		}
+		if r != nil && f == nil {
+			// Not a file: os/exec would copy it in a goroutine that Wait
+			// waits for, so exec() would return only at the next input.
+			// The child gets a pipe instead, fed until it exits.
+			pr, pw, err := os.Pipe()
+			if err != nil {
+				return errnoFrom(err)
+			}
+			release = append(release, func() { _ = pr.Close() }) // the child has its own copy
+			feeds = append(feeds, pw)
+			go func(r io.Reader) {
+				// Fails once the child is gone and pw is closed. What the
+				// last read took then goes nowhere, as it would have in
+				// the child.
+				_, _ = io.Copy(pw, r)
+				_ = pw.Close() // EOF for the child; a second close changes nothing
+			}(r)
+			r = pr
+		}
 
 		switch fd {
 		case 0:
@@ -249,6 +274,9 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 	}
 
 	if err := cmd.Start(); err != nil {
+		for _, f := range feeds {
+			_ = f.Close() // no child to feed
+		}
 		return errnoFrom(err)
 	}
 	pid := int32(cmd.Process.Pid)
@@ -260,6 +288,9 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 		// The exit status is read from cmd.ProcessState below; the error
 		// adds nothing the guest can see.
 		_ = cmd.Wait()
+		for _, f := range feeds {
+			_ = f.Close() // the child is gone; a feeder still writing stops
+		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		c.done = true
@@ -345,10 +376,12 @@ func processWithBinDir(env []string, dir string) []string {
 		return env
 	}
 	sep := string(filepath.ListSeparator)
-	for i, kv := range env {
-		if v, ok := processPathValue(kv); ok {
+	// The last: os/exec keeps it of two, as a script's putenv("PATH=...")
+	// on Windows adds one to the host's Path.
+	for i := len(env) - 1; i >= 0; i-- {
+		if v, ok := processPathValue(env[i]); ok {
 			// The key as it was: Windows spells it Path.
-			env[i] = kv[:len(kv)-len(v)] + dir + sep + v
+			env[i] = env[i][:len(env[i])-len(v)] + dir + sep + v
 			return env
 		}
 	}

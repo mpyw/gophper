@@ -275,6 +275,7 @@ func TestProcessWithBinDir(t *testing.T) {
 	}{
 		{"no dir", []string{"A=1"}, "", []string{"A=1"}},
 		{"before PATH", []string{"A=1", "PATH=/x"}, "/bin/php", []string{"A=1", "PATH=/bin/php" + sep + "/x"}},
+		{"the last PATH, which wins", []string{"PATH=/x", "PATH=/y"}, "/bin/php", []string{"PATH=/x", "PATH=/bin/php" + sep + "/y"}},
 		{"no PATH", []string{"A=1"}, "/bin/php", []string{"A=1", strings.TrimSuffix("PATH=/bin/php"+sep+processDefaultPath, sep)}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {

@@ -264,3 +264,45 @@ func TestProcessAbsolutePath(t *testing.T) {
 		t.Errorf("exit %d: %q", code, out)
 	}
 }
+
+// TestProcessStreamedStdin starts a child while the instance's stdin is a
+// stream with nothing to read yet. The child gets a pipe, so waiting for it
+// does not wait for the next input as well.
+func TestProcessStreamedStdin(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, pw := io.Pipe()
+	defer func() { _ = pw.Close() }() // ends the feeder still reading
+	var out bytes.Buffer
+	done := make(chan error, 1)
+	go func() {
+		_, err := newTestEngine(t).RunCLI(context.Background(), gophper.Options{
+			Args: []string{"-r", fmt.Sprintf(`
+				$p = proc_open([%q, "-test.run=^$"], [1 => ["pipe", "w"], 2 => ["pipe", "w"]], $pipes);
+				stream_get_contents($pipes[1]);
+				echo proc_close($p);`, gophper.HostToGuest(exe))},
+			Stdin:     pr,
+			Stdout:    &out,
+			Stderr:    &out,
+			Dir:       gophper.HostToGuest(wd),
+			FS:        gophper.HostFS(),
+			HostPath:  gophper.HostPaths,
+			Processes: true,
+		})
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil || out.String() != "0" {
+			t.Errorf("%q, %v", out.String(), err)
+		}
+	case <-time.After(30 * time.Second):
+		t.Fatal("proc_close waited for stdin")
+	}
+}

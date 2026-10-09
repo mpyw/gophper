@@ -347,7 +347,7 @@ gophper runs on Windows too. These differ from Unix:
 | Paths | PHP sees each drive at `/c`, `/d` and so on. `C:\app\index.php` is `/c/app/index.php`. `gophper php` converts absolute path arguments. In Go, convert with `gophper.HostToGuest`. |
 | Temporary files | `gophper php` sets `TMPDIR` to the host's temporary directory, if unset. |
 | The working directory | Without `Options.Dir`, PHP starts at `/`, which is no drive. Programs then cannot start. `gophper php` sets it to the current directory. |
-| `proc_open` and the like | Commands run with `sh` from `PATH`, as Git for Windows provides. Without one, they run with `cmd.exe /s /c`. A program by name is found in `PATH` with the extensions of `PATHEXT`. |
+| `proc_open` and the like | Commands run with `sh` from `PATH`, as Git for Windows provides. Without one, they run with `cmd.exe /s /c`. A program by name is found in `PATH` with the extensions of `PATHEXT`. A `.bat` or `.cmd` file gets no argument that cmd.exe would read, such as one with `&` or `%`. |
 | `PHP_BINARY` | A `php.exe` that runs `gophper php`. It is gophper itself, linked or copied into the cache directory, with the global options in a file beside it. With `--no-cache`, it goes in the user's local application data. |
 | Users and groups | The uid and gid are 1000. Every file is owned by them. |
 | `stream_socket_pair` | Two loopback TCP sockets, as Windows has no `socketpair`. |

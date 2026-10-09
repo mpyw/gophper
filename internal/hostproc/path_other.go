@@ -22,3 +22,7 @@ func processExecutable(path string) (string, bool) {
 	st, err := os.Stat(path)
 	return path, err == nil && st.Mode().IsRegular() && st.Mode()&0o111 != 0
 }
+
+// processBatchSafe reports whether name can start with args. Only Windows
+// has batch files, which cmd.exe runs.
+func processBatchSafe(string, []string) bool { return true }

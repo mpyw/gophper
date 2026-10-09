@@ -25,17 +25,19 @@ func processPathValue(kv string) (string, bool) {
 // processExecutable finds path, or path with an extension of PATHEXT, as
 // Windows runs a name. Windows reports no execute bits.
 func processExecutable(path string) (string, bool) {
-	candidates := []string{path}
-	if filepath.Ext(path) == "" {
-		exts := os.Getenv("PATHEXT")
-		if exts == "" {
-			exts = ".COM;.EXE;.BAT;.CMD"
-		}
-		candidates = nil
-		for ext := range strings.SplitSeq(exts, ";") {
-			if ext != "" {
-				candidates = append(candidates, path+strings.ToLower(ext))
-			}
+	// The name as it is if it has an extension, then with each of PATHEXT,
+	// as os/exec.LookPath does: foo.bat.exe is found by foo.bat.
+	var candidates []string
+	if filepath.Ext(path) != "" {
+		candidates = append(candidates, path)
+	}
+	exts := os.Getenv("PATHEXT")
+	if exts == "" {
+		exts = ".COM;.EXE;.BAT;.CMD"
+	}
+	for ext := range strings.SplitSeq(exts, ";") {
+		if ext != "" {
+			candidates = append(candidates, path+strings.ToLower(ext))
 		}
 	}
 	for _, c := range candidates {
@@ -44,4 +46,23 @@ func processExecutable(path string) (string, bool) {
 		}
 	}
 	return "", false
+}
+
+// processBatchSafe reports whether Windows can start name with args as
+// they are. A batch file runs through cmd.exe, which reads its command line
+// otherwise than the program arguments os/exec quotes for: & in an argument
+// would start another command (BatBadBut, CVE-2024-1874 in PHP). Such an
+// argument is refused.
+func processBatchSafe(name string, args []string) bool {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".bat", ".cmd":
+	default:
+		return true
+	}
+	for _, a := range args {
+		if strings.ContainsAny(a, "\"&|<>^%!\r\n") {
+			return false
+		}
+	}
+	return true
 }

@@ -29,7 +29,12 @@ func TestProcessPathWindows(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Setenv("PATHEXT", ".COM;.EXE")
-	for name, want := range map[string]string{"prog": prog, "prog.exe": prog, "sub": "", "missing": ""} {
+	// A name with a dot of its own still takes PATHEXT.
+	dotted := filepath.Join(dir, "tool.v2.exe")
+	if err := os.WriteFile(dotted, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]string{"prog": prog, "prog.exe": prog, "tool.v2": dotted, "sub": "", "missing": ""} {
 		got, err := processResolve(name, true, dir, []string{"Path=" + dir})
 		if (want == "" && err == nil) || (want != "" && (err != nil || !os.SameFile(processStat(t, got), processStat(t, want)))) {
 			t.Errorf("processResolve(%q) = %q, %v, want %q", name, got, err, want)
@@ -44,4 +49,24 @@ func processStat(t *testing.T, path string) os.FileInfo {
 		t.Fatal(err)
 	}
 	return fi
+}
+
+// TestProcessBatchSafe refuses what cmd.exe would read in a batch file's
+// arguments, and lets other programs have them.
+func TestProcessBatchSafe(t *testing.T) {
+	for _, tt := range []struct {
+		name string
+		args []string
+		want bool
+	}{
+		{`C:\x\npm.cmd`, []string{"npm", "install", "left-pad"}, true},
+		{`C:\x\npm.CMD`, []string{"npm", "install", "x & calc"}, false},
+		{`C:\x\run.bat`, []string{"run", "100%"}, false},
+		{`C:\x\run.bat`, []string{"run", "a\nb"}, false},
+		{`C:\x\git.exe`, []string{"git", "commit", "-m", "a & b"}, true},
+	} {
+		if got := processBatchSafe(tt.name, tt.args); got != tt.want {
+			t.Errorf("processBatchSafe(%q, %q) = %v, want %v", tt.name, tt.args, got, tt.want)
+		}
+	}
 }

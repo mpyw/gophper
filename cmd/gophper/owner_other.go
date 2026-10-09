@@ -7,5 +7,5 @@ package main
 import "os"
 
 // phpBinaryOwned reports whether this user owns fi. On Windows,
-// phpBinaryBase does not ask: the temporary directory is in the profile.
+// phpBinaryBase does not ask: the user's local application data is private.
 func phpBinaryOwned(os.FileInfo) bool { return false }
