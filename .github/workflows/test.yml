@@ -36,6 +36,19 @@ jobs:
 
       - uses: jdx/mise-action@v4
 
+      # wazero's compiled PHP binaries: 12 s on a fast machine from an empty
+      # cache, and far longer on a runner. The CLI tests' own cache, and the
+      # user cache directory the rest use, on each OS. go.sum names the
+      # wazero and gophper-wasm versions, which make the compiled code.
+      - uses: actions/cache@v6
+        with:
+          path: |
+            ${{ runner.temp }}/gophper-test-cache
+            ~/.cache/gophper
+            ~/Library/Caches/gophper
+            ~/AppData/Local/gophper
+          key: gophper-compiled-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('go.sum') }}
+
       - name: Vet
         run: go vet ./...
 
@@ -45,6 +58,8 @@ jobs:
       - name: Test with coverage
         shell: bash
         run: ./coverage.sh
+        env:
+          GOPHPER_TEST_CACHE_DIR: ${{ runner.temp }}/gophper-test-cache
 
       # Codecov merges the three uploads of a commit. The flag tells them
       # apart. Codecov being unreachable is no reason to fail the run.

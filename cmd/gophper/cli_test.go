@@ -70,6 +70,11 @@ func cliMain(m *testing.M) int {
 		cliBinary += ".exe"
 	}
 	cliCacheDir = filepath.Join(dir, "cache")
+	// CI keeps the cache between runs: compiling the PHP binaries from an
+	// empty one takes 12 s on a fast machine, and far longer on a runner.
+	if d := os.Getenv("GOPHPER_TEST_CACHE_DIR"); d != "" {
+		cliCacheDir = d
+	}
 
 	args := []string{"build", "-o", cliBinary}
 	if d := os.Getenv("GOPHPER_TEST_COVERDIR"); d != "" {
