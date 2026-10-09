@@ -1,11 +1,10 @@
-// Command genlicenses writes modlicenses.txt.gz for gophper licenses: the
+// Command genlicenses writes modlicenses.txt for gophper licenses: the
 // license files of every Go module linked into cmd/gophper, and Go's own.
 // Run it with go generate after go.mod changes.
 package main
 
 import (
 	"bytes"
-	"compress/gzip"
 	"fmt"
 	"os"
 	"os/exec"
@@ -65,13 +64,7 @@ func run() error {
 		}
 	}
 
-	var gz bytes.Buffer
-	zw, _ := gzip.NewWriterLevel(&gz, gzip.BestCompression)
-	zw.Write(buf.Bytes())
-	if err := zw.Close(); err != nil {
-		return err
-	}
-	return os.WriteFile("modlicenses.txt.gz", gz.Bytes(), 0o644)
+	return os.WriteFile("modlicenses.txt", buf.Bytes(), 0o644)
 }
 
 // listModules adds the modules linked into a build to mods. A go.work

@@ -1,0 +1,2 @@
+# Written by go generate ./cmd/gophper. Committed, since go install does not run it.
+cmd/gophper/modlicenses.txt linguist-generated

@@ -3,8 +3,6 @@
 package main
 
 import (
-	"bytes"
-	"compress/gzip"
 	"context"
 	_ "embed"
 	"fmt"
@@ -19,11 +17,12 @@ import (
 )
 
 // licensesModules holds the license files of the Go modules linked into
-// gophper, and Go's own, gzipped.
+// gophper, and Go's own. It is plain text, so that a review shows what
+// changed.
 //
 //go:generate go run ./internal/genlicenses
-//go:embed modlicenses.txt.gz
-var licensesModules []byte
+//go:embed modlicenses.txt
+var licensesModules string
 
 // licensesAction prints what a distributor of gophper must pass on.
 func licensesAction(_ context.Context, cmd *cli.Command) error {
@@ -40,11 +39,7 @@ func licensesAction(_ context.Context, cmd *cli.Command) error {
 		}
 		fmt.Fprintf(w, "\n---- %s ----\n\n%s\n", strings.TrimSuffix(e.Name(), ".txt"), b)
 	}
-	r, err := gzip.NewReader(bytes.NewReader(licensesModules))
-	if err != nil {
-		return err
-	}
 	fmt.Fprintln(w)
-	_, err = io.Copy(w, r)
+	_, err = io.WriteString(w, licensesModules)
 	return err
 }
