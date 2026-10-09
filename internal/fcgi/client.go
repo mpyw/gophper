@@ -28,7 +28,13 @@ func Do(ctx context.Context, conn net.Conn, params map[string]string, stdin io.R
 	const id = 1
 	writeErr := make(chan error, 1)
 	go func() {
-		writeErr <- c.sendRequest(id, params, stdin)
+		err := c.sendRequest(id, params, stdin)
+		writeErr <- err
+		if err != nil {
+			// The responder may wait for the rest of the body forever. The
+			// reader wakes and finds err.
+			conn.SetDeadline(time.Unix(1, 0))
+		}
 	}()
 
 	for {

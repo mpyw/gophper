@@ -669,7 +669,13 @@ func (x socketExports) send(ctx context.Context, m api.Module, fd int32, bufPtr 
 	}
 
 	if e.datagram() {
-		if to == "" {
+		if e.conn != nil && to != "" && to != socketAddrText(e.conn.RemoteAddr()) {
+			// As on BSD, a connected socket sends only to its peer. Sending
+			// through e.packet would come from another port.
+			t.mu.Unlock()
+			return -errnoEISCONN
+		}
+		if to == "" || e.conn != nil {
 			conn := e.conn
 			t.mu.Unlock()
 			if conn == nil {

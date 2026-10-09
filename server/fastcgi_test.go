@@ -11,6 +11,7 @@ import (
 	"net"
 	"net/http"
 	"net/textproto"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -63,12 +64,20 @@ func (c *fcgiClient) write(typ uint8, id uint16, content []byte) error {
 }
 
 func (c *fcgiClient) do(id uint16, keep bool, params map[string]string, body []byte) (*fcgiResponse, error) {
+	if err := c.send(id, keep, params, body); err != nil {
+		return nil, err
+	}
+	return c.read()
+}
+
+// send writes a request, with its body.
+func (c *fcgiClient) send(id uint16, keep bool, params map[string]string, body []byte) error {
 	flags := byte(0)
 	if keep {
 		flags = 1
 	}
 	if err := c.write(1, id, []byte{0, 1, flags, 0, 0, 0, 0, 0}); err != nil {
-		return nil, err
+		return err
 	}
 	var p []byte
 	for k, v := range params {
@@ -89,8 +98,11 @@ func (c *fcgiClient) do(id uint16, keep bool, params map[string]string, body []b
 		c.write(5, id, body[:n])
 		body = body[n:]
 	}
-	c.write(5, id, nil)
+	return c.write(5, id, nil)
+}
 
+// read reads a response up to FCGI_END_REQUEST.
+func (c *fcgiClient) read() (*fcgiResponse, error) {
 	var stdout, stderr bytes.Buffer
 	for {
 		var h struct {
@@ -483,5 +495,243 @@ func TestFastCGIAllowedClients(t *testing.T) {
 	addr, root := startFCGIWith(t, func(cfg *server.FastCGIConfig) { cfg.AllowedClients = []string{"10.0.0.0/8"} })
 	if _, err := dialFCGI(t, addr).do(1, false, params(root, "GET", "/index.php", nil), nil); err == nil {
 		t.Error("a client outside AllowedClients got a response")
+	}
+}
+
+func TestFastCGIConfigErrors(t *testing.T) {
+	engine, err := gophper.NewEngine(context.Background(), gophper.DefaultEngineConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close(context.Background())
+	dir := t.TempDir()
+	file := filepath.Join(dir, "file")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		cfg  server.FastCGIConfig
+		want string
+	}{
+		{"no mounts", server.FastCGIConfig{}, "no mounts"},
+		{"bad client", server.FastCGIConfig{
+			PHPConfig:      server.PHPConfig{Mounts: []server.Mount{{Dir: dir}}},
+			AllowedClients: []string{"10.0.0.0/8", "localhost"},
+		}, `allowed client "localhost": not an address or prefix`},
+		{"relative mount", server.FastCGIConfig{PHPConfig: server.PHPConfig{Mounts: []server.Mount{{Dir: "www"}}}}, `mount "www": not an absolute path`},
+		{"mount is a file", server.FastCGIConfig{PHPConfig: server.PHPConfig{Mounts: []server.Mount{{Dir: file}}}}, "not a directory"},
+		{"missing mount", server.FastCGIConfig{PHPConfig: server.PHPConfig{Mounts: []server.Mount{{Dir: filepath.Join(dir, "nope")}}}}, "not a directory"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv, err := server.NewFastCGIServer(engine, tc.cfg)
+			if err == nil {
+				srv.Close()
+				t.Fatal("no error")
+			}
+			if !strings.Contains(err.Error(), tc.want) {
+				t.Errorf("err = %v, want %q", err, tc.want)
+			}
+		})
+	}
+}
+
+// An address in AllowedClients allows that address only.
+func TestFastCGIAllowedClientAddress(t *testing.T) {
+	addr, root := startFCGIWith(t, func(cfg *server.FastCGIConfig) { cfg.AllowedClients = []string{"192.0.2.1", "127.0.0.1"} })
+	res, err := dialFCGI(t, addr).do(1, false, params(root, "GET", "/index.php", nil), nil)
+	if err != nil || res.Status != 201 {
+		t.Fatalf("%v %+v", err, res)
+	}
+}
+
+// AllowedClients applies to TCP. A Unix socket is guarded by its file mode.
+func TestFastCGIAllowedClientsUnix(t *testing.T) {
+	engine, err := gophper.NewEngine(context.Background(), gophper.DefaultEngineConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer engine.Close(context.Background())
+	root, err := filepath.Abs("testdata/www")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv, err := server.NewFastCGIServer(engine, server.FastCGIConfig{
+		PHPConfig:      server.PHPConfig{Mounts: []server.Mount{{Dir: root}}, TempDir: t.TempDir(), Concurrency: 1},
+		AllowedClients: []string{"10.0.0.0/8"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer srv.Close()
+	// Short, as a Unix socket path is limited to about 100 bytes.
+	dir, err := os.MkdirTemp("", "gfcgi")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer os.RemoveAll(dir)
+	l, err := net.Listen("unix", filepath.Join(dir, "s"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- srv.Serve(ctx, l) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}()
+
+	conn, err := net.Dial("unix", l.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	c := &fcgiClient{conn: conn, r: bufio.NewReader(conn)}
+	res, err := c.do(1, false, params(root, "GET", "/index.php", nil), nil)
+	if err != nil || res.Status != 201 {
+		t.Fatalf("%v %+v", err, res)
+	}
+}
+
+// startFCGIScripts serves a directory holding scripts, by file name, with
+// one PHP instance.
+func startFCGIScripts(t *testing.T, scripts map[string]string, configure func(*server.FastCGIConfig)) (addr, root string) {
+	t.Helper()
+	root = t.TempDir()
+	for name, src := range scripts {
+		if err := os.WriteFile(filepath.Join(root, name), []byte(src), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	addr, _ = startFCGIWith(t, func(cfg *server.FastCGIConfig) {
+		cfg.Mounts = []server.Mount{{Dir: root}}
+		cfg.Concurrency = 1
+		cfg.ErrorLog = io.Discard
+		configure(cfg)
+	})
+	return addr, root
+}
+
+// A worker killed in the middle of a request fails that request only. The
+// next one runs on a fresh worker.
+func TestFastCGIWorkerKilled(t *testing.T) {
+	addr, root := startFCGIScripts(t, map[string]string{
+		"kill.php":    `<?php posix_kill(getmypid(), SIGKILL);`,
+		"partial.php": `<?php echo "partial"; flush(); posix_kill(getmypid(), SIGKILL);`,
+		"ok.php":      `<?php echo "ok";`,
+	}, func(*server.FastCGIConfig) {})
+	ok := func() {
+		t.Helper()
+		res, err := dialFCGI(t, addr).do(1, false, params(root, "GET", "/ok.php", nil), nil)
+		if err != nil || res.Status != 200 || res.Body != "ok" {
+			t.Fatalf("the next request: %v %+v", err, res)
+		}
+	}
+	ok()
+
+	res, err := dialFCGI(t, addr).do(1, false, params(root, "GET", "/kill.php", nil), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != http.StatusInternalServerError || res.AppStatus == 0 || !strings.Contains(res.Stderr, "kill.php") {
+		t.Errorf("killed: status %d, app status %d, stderr %q", res.Status, res.AppStatus, res.Stderr)
+	}
+	ok()
+
+	// Once PHP sent output, the error cannot replace it.
+	res, err = dialFCGI(t, addr).do(1, false, params(root, "GET", "/partial.php", nil), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != 200 || res.Body != "partial" || res.AppStatus == 0 {
+		t.Errorf("killed after output: status %d, body %q, app status %d", res.Status, res.Body, res.AppStatus)
+	}
+	ok()
+}
+
+// A request that waits longer than MaxWaitTime for the only instance gets 503.
+func TestFastCGIBusy(t *testing.T) {
+	addr, root := startFCGIScripts(t, map[string]string{
+		"slow.php": `<?php usleep(300000); echo "slow";`,
+		"ok.php":   `<?php echo "ok";`,
+	}, func(cfg *server.FastCGIConfig) {
+		cfg.MaxWaitTime = 20 * time.Millisecond
+		cfg.StatusPath = "/status"
+	})
+	slow := make(chan *fcgiResponse, 1)
+	go func() {
+		res, err := dialFCGI(t, addr).do(1, false, params(root, "GET", "/slow.php", nil), nil)
+		if err != nil {
+			t.Error(err)
+		}
+		slow <- res
+	}()
+	// Wait until it holds the instance.
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		res, err := dialFCGI(t, addr).do(1, false, params(root, "GET", "/status", nil), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(res.Body, "active processes: 1\n") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the slow request did not start:\n%s", res.Body)
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	res, err := dialFCGI(t, addr).do(1, false, params(root, "GET", "/ok.php", nil), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != http.StatusServiceUnavailable || !strings.Contains(res.Stderr, "maximum wait time") {
+		t.Errorf("status %d, stderr %q", res.Status, res.Stderr)
+	}
+	if res := <-slow; res == nil || res.Body != "slow" {
+		t.Errorf("the slow request: %+v", res)
+	}
+}
+
+// FCGI_ABORT_REQUEST stops the script, and the worker is replaced.
+func TestFastCGIAbort(t *testing.T) {
+	addr, root := startFCGIScripts(t, map[string]string{
+		"sleep.php": `<?php sleep(10); echo "finished";`,
+		"ok.php":    `<?php echo "ok";`,
+	}, func(cfg *server.FastCGIConfig) { cfg.StatusPath = "/status" })
+	c := dialFCGI(t, addr)
+	if err := c.send(1, false, params(root, "GET", "/sleep.php", nil), nil); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; {
+		res, err := dialFCGI(t, addr).do(1, false, params(root, "GET", "/status", nil), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if strings.Contains(res.Body, "active processes: 1\n") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the request did not start")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	start := time.Now()
+	if err := c.write(2, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	c.conn.SetDeadline(time.Now().Add(5 * time.Second))
+	res, err := c.read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(res.Body, "finished") || res.AppStatus == 0 || time.Since(start) > 3*time.Second {
+		t.Errorf("after abort: status %d, body %q, app status %d, %s", res.Status, res.Body, res.AppStatus, time.Since(start))
+	}
+	res, err = dialFCGI(t, addr).do(1, false, params(root, "GET", "/ok.php", nil), nil)
+	if err != nil || res.Body != "ok" {
+		t.Errorf("the next request: %v %+v", err, res)
 	}
 }

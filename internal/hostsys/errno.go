@@ -11,5 +11,6 @@ const (
 	errnoEINVAL int32 = 28
 	errnoEIO    int32 = 29
 	errnoENOENT int32 = 44
+	errnoEPERM  int32 = 63
 	errnoEROFS  int32 = 69
 )

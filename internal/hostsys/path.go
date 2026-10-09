@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io/fs"
 	"os"
+	"syscall"
 
 	"github.com/tetratelabs/wazero/api"
 )
@@ -122,6 +123,10 @@ func systemErrno(err error) int32 {
 		return 0
 	case errors.Is(err, fs.ErrNotExist):
 		return errnoENOENT
+	case errors.Is(err, syscall.EPERM):
+		// chown and chmod of a file the user does not own. fs.ErrPermission
+		// matches it too, but "Permission denied" would be the wrong message.
+		return errnoEPERM
 	case errors.Is(err, fs.ErrPermission):
 		return errnoEACCES
 	}

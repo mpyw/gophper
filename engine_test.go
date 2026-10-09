@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -161,5 +162,175 @@ func TestCancelDuringStartup(t *testing.T) {
 		if d := time.Since(start); d > 2*time.Second {
 			t.Errorf("delay %s: took %s", delay, d)
 		}
+	}
+}
+
+// newEngineWith returns an Engine with cfg, closed when the test ends.
+func newEngineWith(t *testing.T, cfg gophper.EngineConfig) *gophper.Engine {
+	t.Helper()
+	e, err := gophper.NewEngine(context.Background(), cfg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { e.Close(context.Background()) })
+	return e
+}
+
+// runEngineCLI runs code with e and returns the output.
+func runEngineCLI(t *testing.T, e *gophper.Engine, code string) string {
+	t.Helper()
+	var out bytes.Buffer
+	exit, err := e.RunCLI(context.Background(), gophper.Options{Args: []string{"-r", code}, Stdout: &out, Stderr: &out})
+	if err != nil || exit != 0 {
+		t.Fatalf("exit %d, err %v\n%s", exit, err, out.String())
+	}
+	return out.String()
+}
+
+// The cache directory keeps the decompressed binary, which the next
+// Engine reads instead of decompressing again.
+func TestEngineCacheDir(t *testing.T) {
+	dir := t.TempDir()
+	// Share wazero's compiled code with the default cache, so that only the
+	// binaries start empty.
+	if def := gophper.DefaultEngineConfig().CacheDir; def != "" {
+		compiled, _ := filepath.Glob(filepath.Join(def, "wazero-*"))
+		for _, c := range compiled {
+			if err := os.Symlink(c, filepath.Join(dir, filepath.Base(c))); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if got := runEngineCLI(t, newEngineWith(t, gophper.EngineConfig{CacheDir: dir}), `echo "first";`); got != "first" {
+		t.Fatalf("got %q", got)
+	}
+	cached, err := filepath.Glob(filepath.Join(dir, "wasm", "*.wasm"))
+	if err != nil || len(cached) != 1 {
+		t.Fatalf("cached binaries: %v, %v", cached, err)
+	}
+	info, err := os.Stat(cached[0])
+	if err != nil || info.Size() < 1<<20 {
+		t.Fatalf("cached binary: %v, %v", info, err)
+	}
+	if got := runEngineCLI(t, newEngineWith(t, gophper.EngineConfig{CacheDir: dir}), `echo "second";`); got != "second" {
+		t.Errorf("from the cache: %q", got)
+	}
+
+	// An empty file, as a crash could leave, is replaced.
+	if err := os.WriteFile(cached[0], nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := runEngineCLI(t, newEngineWith(t, gophper.EngineConfig{CacheDir: dir}), `echo "third";`); got != "third" {
+		t.Errorf("over an empty file: %q", got)
+	}
+	if info, err := os.Stat(cached[0]); err != nil || info.Size() < 1<<20 {
+		t.Errorf("the empty file was not replaced: %v, %v", info, err)
+	}
+	if leftover, _ := filepath.Glob(filepath.Join(dir, "wasm", ".wasm-*")); len(leftover) != 0 {
+		t.Errorf("temporary files left: %v", leftover)
+	}
+
+	// Failing to keep the binary only costs time. Here "wasm" is taken by a file.
+	if err := os.RemoveAll(filepath.Join(dir, "wasm")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "wasm"), []byte("in the way"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if got := runEngineCLI(t, newEngineWith(t, gophper.EngineConfig{CacheDir: dir}), `echo "fourth";`); got != "fourth" {
+		t.Errorf("without a place for the binary: %q", got)
+	}
+}
+
+func TestEngineCacheDirInvalid(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	e, err := gophper.NewEngine(context.Background(), gophper.EngineConfig{CacheDir: file})
+	if err == nil {
+		e.Close(context.Background())
+		t.Fatal("no error for a cache directory that is a file")
+	}
+	if !strings.Contains(err.Error(), "compilation cache") {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestDefaultEngineConfigWithoutCacheDir(t *testing.T) {
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CACHE_HOME", "")
+	t.Setenv("LocalAppData", "")
+	if cfg := gophper.DefaultEngineConfig(); cfg != (gophper.EngineConfig{}) {
+		t.Errorf("got %+v, want no cache directory", cfg)
+	}
+}
+
+func TestEngineBuildID(t *testing.T) {
+	a := newEngineWith(t, gophper.EngineConfig{}).BuildID()
+	b := newEngineWith(t, gophper.EngineConfig{}).BuildID()
+	if a == "" || a != b {
+		t.Errorf("build ids %q and %q", a, b)
+	}
+}
+
+// PHP_BINARY reports EngineConfig.PHPBinary, and PHP can see it.
+func TestEnginePHPBinary(t *testing.T) {
+	dir := t.TempDir()
+	bin := filepath.Join(dir, "php")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	cfg := gophper.DefaultEngineConfig()
+	cfg.PHPBinary = bin
+	got := runEngineCLI(t, newEngineWith(t, cfg), `echo PHP_BINARY, "|", is_file(PHP_BINARY) ? "visible" : "hidden";`)
+	if want := filepath.ToSlash(bin) + "|visible"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got := runEngineCLI(t, newTestEngine(t), `var_dump(PHP_BINARY);`); got != "string(0) \"\"\n" {
+		t.Errorf("without PHPBinary: %q", got)
+	}
+}
+
+// RunCGI runs php-cgi once: the request comes from the environment, and
+// the response has CGI headers.
+func TestEngineRunCGI(t *testing.T) {
+	dir := t.TempDir()
+	script := filepath.Join(dir, "index.php")
+	if err := os.WriteFile(script, []byte(`<?php header("X-Test: yes"); echo $_SERVER["REQUEST_METHOD"], " ", $_GET["q"], " ", file_get_contents("php://input");`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	var out, stderr bytes.Buffer
+	code, err := newTestEngine(t).RunCGI(context.Background(), gophper.Options{
+		Env: []string{
+			"REDIRECT_STATUS=200", "GATEWAY_INTERFACE=CGI/1.1", "REQUEST_METHOD=POST", "QUERY_STRING=q=1",
+			"SCRIPT_FILENAME=" + script, "CONTENT_LENGTH=4", "CONTENT_TYPE=text/plain",
+		},
+		Stdin:  strings.NewReader("body"),
+		Stdout: &out,
+		Stderr: &stderr,
+		FS:     wazero.NewFSConfig().WithReadOnlyDirMount(dir, dir).WithDirMount(t.TempDir(), "/tmp"),
+	})
+	if err != nil || code != 0 {
+		t.Fatalf("exit %d, err %v\n%s", code, err, stderr.String())
+	}
+	head, body, _ := strings.Cut(out.String(), "\r\n\r\n")
+	if !strings.Contains(head, "X-Test: yes") || body != "POST 1 body" {
+		t.Errorf("got %q", out.String())
+	}
+}
+
+// An ExtensionDir that does not exist leaves PHP without extensions.
+func TestEngineMissingExtensionDir(t *testing.T) {
+	cfg := gophper.DefaultEngineConfig()
+	cfg.ExtensionDir = filepath.Join(t.TempDir(), "missing")
+	var out bytes.Buffer
+	code, err := newEngineWith(t, cfg).RunCLI(context.Background(), gophper.Options{
+		Args:   []string{"-d", "extension=dl_test", "-r", `var_dump(extension_loaded("dl_test"));`},
+		Stdout: &out,
+		Stderr: &out,
+	})
+	if err != nil || code != 0 || !strings.Contains(out.String(), "Unable to load dynamic library 'dl_test'") || !strings.HasSuffix(out.String(), "bool(false)\n") {
+		t.Errorf("exit %d, err %v\n%s", code, err, out.String())
 	}
 }

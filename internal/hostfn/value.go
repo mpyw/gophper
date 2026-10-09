@@ -1,6 +1,7 @@
 package hostfn
 
 import (
+	"cmp"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -103,7 +104,8 @@ func valueDecode(b []byte) (any, []byte, error) {
 
 // valueEncode appends v. Go values map to PHP ones: nil, bools, integers,
 // floats, strings and []byte, slices and arrays as lists, and maps with
-// string or integer keys, in sorted key order.
+// string or integer keys, which a map[any]any may mix. Keys go in sorted
+// order, integers first.
 //
 //declscope:shared // function.go encodes results with it
 func valueEncode(out []byte, v any) ([]byte, error) {
@@ -146,21 +148,24 @@ func valueEncode(out []byte, v any) ([]byte, error) {
 		return out, nil
 	case reflect.Map:
 		keys := rv.MapKeys()
-		slices.SortFunc(keys, func(a, b reflect.Value) int {
-			return valueCmpKey(a, b)
-		})
+		slices.SortFunc(keys, valueCmpKey)
 		out = binary.LittleEndian.AppendUint32(append(out, valueArray), uint32(len(keys)))
-		for _, k := range keys {
+		for _, mk := range keys {
+			// A map[any]any holds each key in an interface.
+			k := mk
+			if k.Kind() == reflect.Interface {
+				k = k.Elem()
+			}
 			switch k.Kind() {
 			case reflect.String:
 				out = valueEncodeString(out, k.String())
 			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64:
 				out = binary.LittleEndian.AppendUint64(append(out, valueInt), uint64(k.Int()))
 			default:
-				return nil, fmt.Errorf("hostfn: a PHP array key cannot be a %s", k.Type())
+				return nil, fmt.Errorf("hostfn: a PHP array key cannot be a %T", mk.Interface())
 			}
 			var err error
-			if out, err = valueEncode(out, rv.MapIndex(k).Interface()); err != nil {
+			if out, err = valueEncode(out, rv.MapIndex(mk).Interface()); err != nil {
 				return nil, err
 			}
 		}
@@ -179,23 +184,23 @@ func valueEncodeString(out []byte, s string) []byte {
 	return append(out, s...)
 }
 
+// valueCmpKey orders map keys: integers, then strings, each ascending.
 func valueCmpKey(a, b reflect.Value) int {
-	if a.Kind() == reflect.String && b.Kind() == reflect.String {
-		switch {
-		case a.String() < b.String():
-			return -1
-		case a.String() > b.String():
-			return 1
-		}
-		return 0
+	if a.Kind() == reflect.Interface {
+		a = a.Elem()
 	}
-	if a.CanInt() && b.CanInt() {
-		switch {
-		case a.Int() < b.Int():
-			return -1
-		case a.Int() > b.Int():
-			return 1
-		}
+	if b.Kind() == reflect.Interface {
+		b = b.Elem()
+	}
+	switch {
+	case a.CanInt() && b.CanInt():
+		return cmp.Compare(a.Int(), b.Int())
+	case a.Kind() == reflect.String && b.Kind() == reflect.String:
+		return cmp.Compare(a.String(), b.String())
+	case a.CanInt():
+		return -1
+	case b.CanInt():
+		return 1
 	}
 	return 0
 }

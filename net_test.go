@@ -273,3 +273,154 @@ func TestSocketDNSRecords(t *testing.T) {
 		t.Errorf("exit %d\n%s", code, out)
 	}
 }
+
+func TestSocketPairInPHP(t *testing.T) {
+	out, code := runPHP(t, `
+		[$a, $b] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+		fwrite($a, "to b\n");
+		echo fgets($b);
+		fwrite($b, "to a\n");
+		echo fgets($a);
+		fclose($b);
+		var_dump(fread($a, 10), feof($a));
+
+		// A child process can be given an end as is.
+		[$parent, $child] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+		$p = proc_open(["sh", "-c", "read line; echo \"child got: \$line\""], [0 => $child, 1 => $child], $pipes);
+		fclose($child);
+		fwrite($parent, "hello\n");
+		echo fgets($parent);
+		echo "exit ", proc_close($p), "\n";
+	`)
+	want := "to b\nto a\nstring(0) \"\"\nbool(true)\nchild got: hello\nexit 0\n"
+	if code != 0 || out != want {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
+func TestSocketReverseDNS(t *testing.T) {
+	want := "127.0.0.1" // PHP's answer when the host has no name for it
+	if names, err := net.DefaultResolver.LookupAddr(context.Background(), "127.0.0.1"); err == nil && len(names) > 0 {
+		want = strings.TrimSuffix(names[0], ".")
+	}
+	out, code := runPHP(t, `echo gethostbyaddr("127.0.0.1"), "\n";`)
+	if code != 0 || out != want+"\n" {
+		t.Errorf("exit %d\n%s\nwant %s", code, out, want)
+	}
+}
+
+// A UDP server in PHP: recvfrom and sendto, and the errors PHP warns about.
+func TestSocketUDPServerInPHP(t *testing.T) {
+	out, code := runPHP(t, `
+		$server = stream_socket_server("udp://127.0.0.1:0", $errno, $errstr, STREAM_SERVER_BIND) or die("$errno $errstr");
+		$addr = stream_socket_get_name($server, false);
+		$client = stream_socket_client("udp://$addr", $errno, $errstr) or die("$errno $errstr");
+		fwrite($client, "hello");
+		var_dump(stream_socket_recvfrom($server, 100, STREAM_PEEK));
+		var_dump(stream_socket_recvfrom($server, 100, 0, $from));
+		echo $from === stream_socket_get_name($client, false) ? "from client" : "from $from", "\n";
+		var_dump(stream_socket_sendto($server, "reply", 0, $from));
+		var_dump(fread($client, 100));
+
+		// sendto on a connected socket goes to its peer, from its own port.
+		var_dump(stream_socket_sendto($client, "again", 0, $addr));
+		stream_socket_recvfrom($server, 100, 0, $again);
+		echo $again === $from ? "same port" : "port $again", "\n";
+
+		// Bind to an address in use.
+		var_dump(@stream_socket_server("udp://$addr", $errno, $errstr, STREAM_SERVER_BIND), $errstr);
+		// A write with nowhere to go.
+		var_dump(@fwrite($server, "lost"));
+		echo error_get_last()["message"], "\n";
+	`)
+	want := strings.Join([]string{
+		`string(5) "hello"`,
+		`string(5) "hello"`,
+		"from client",
+		"int(5)",
+		`string(5) "reply"`,
+		"int(5)",
+		"same port",
+		"bool(false)",
+		`string(14) "Address in use"`,
+		"bool(false)",
+		"fwrite(): Send of 4 bytes failed with errno=17 Destination address required",
+		"",
+	}, "\n")
+	if code != 0 || out != want {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
+func TestSocketUnixDatagramInPHP(t *testing.T) {
+	// macOS limits socket paths to 104 bytes, so not under t.TempDir().
+	dir, err := os.MkdirTemp("/tmp", "gophper")
+	if err != nil {
+		t.Skip(err)
+	}
+	defer os.RemoveAll(dir)
+	out, code := runPHP(t, fmt.Sprintf(`
+		$server = stream_socket_server("udg://%[1]s", $errno, $errstr, STREAM_SERVER_BIND) or die("$errno $errstr");
+		$client = stream_socket_client("udg://%[1]s", $errno, $errstr) or die("$errno $errstr");
+		fwrite($client, "over udg");
+		var_dump(fread($server, 100));
+	`, filepath.Join(dir, "dgram.sock")))
+	if code != 0 || out != "string(8) \"over udg\"\n" {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
+// STREAM_CLIENT_ASYNC_CONNECT is a non-blocking connect(2): select says
+// when it is done, and a failure shows on the first write.
+func TestSocketAsyncConnect(t *testing.T) {
+	l := echoServer(t, "tcp", "127.0.0.1:0")
+	closed, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	closedAddr := closed.Addr().String()
+	closed.Close()
+	out, code := runPHP(t, fmt.Sprintf(`
+		$flags = STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT;
+		$fp = stream_socket_client("tcp://%s", $errno, $errstr, 5, $flags) or die("$errno $errstr");
+		$r = null; $w = [$fp]; $e = null;
+		echo "writable: ", stream_select($r, $w, $e, 2) > 0 ? "yes" : "no", "\n";
+		fwrite($fp, "async\n");
+		echo fgets($fp);
+
+		$fp = stream_socket_client("tcp://%s", $errno, $errstr, 5, $flags) or die("$errno $errstr");
+		$r = null; $w = [$fp]; $e = null;
+		echo "done: ", stream_select($r, $w, $e, 2) > 0 ? "yes" : "no", "\n";
+		var_dump(@fwrite($fp, "x"));
+		echo error_get_last()["message"], "\n";
+	`, l.Addr(), closedAddr))
+	want := "writable: yes\necho: async\ndone: yes\nbool(false)\nfwrite(): Send of 1 bytes failed with errno=14 Connection refused\n"
+	if code != 0 || out != want {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
+// Socket context options reach the host socket, and shutdown closes one way.
+func TestSocketOptionsAndShutdown(t *testing.T) {
+	out, code := runPHP(t, `
+		$opts = ["socket" => ["tcp_nodelay" => true, "so_keepalive" => true, "so_rcvbuf" => 16384, "so_sndbuf" => 16384]];
+		$server = stream_socket_server("tcp://127.0.0.1:0", $errno, $errstr, STREAM_SERVER_BIND | STREAM_SERVER_LISTEN, stream_context_create($opts)) or die("$errno $errstr");
+		$addr = stream_socket_get_name($server, false);
+		$opts["socket"]["bindto"] = "127.0.0.1:0";
+		$client = stream_socket_client("tcp://$addr", $errno, $errstr, 5, STREAM_CLIENT_CONNECT, stream_context_create($opts)) or die("$errno $errstr");
+		$conn = stream_socket_accept($server, 5) or die("accept failed");
+		echo stream_socket_get_name($conn, true) === stream_socket_get_name($client, false) ? "names match" : "names differ", "\n";
+
+		fwrite($client, "last words");
+		stream_socket_shutdown($client, STREAM_SHUT_WR);
+		var_dump(stream_get_contents($conn), feof($conn));
+		fwrite($conn, "still open");
+		fclose($conn);
+		var_dump(stream_get_contents($client));
+		var_dump(@fwrite($client, "x"));
+	`)
+	want := "names match\nstring(10) \"last words\"\nbool(true)\nstring(10) \"still open\"\nbool(false)\n"
+	if code != 0 || out != want {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}

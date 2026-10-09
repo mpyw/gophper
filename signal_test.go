@@ -1,3 +1,5 @@
+//go:build unix
+
 package gophper_test
 
 import (
@@ -81,6 +83,49 @@ func TestSignal(t *testing.T) {
 			sleep(5);
 			echo "ready\n";`, syscall.SIGWINCH)
 		if want := "self\nblocked\nself\nalarm\nready\n"; exit != 0 || out != want {
+			t.Errorf("exit %d\n%s", exit, out)
+		}
+	})
+	t.Run("sigtimedwait timeout", func(t *testing.T) {
+		start := time.Now()
+		out, exit := runSignals(t, `
+			pcntl_sigprocmask(SIG_BLOCK, [SIGUSR1]);
+			var_export(pcntl_sigtimedwait([SIGUSR1], $info, 0, 50000000)); echo "\nready\n";`, syscall.SIGWINCH)
+		if exit != 0 || out != "false\nready\n" {
+			t.Errorf("exit %d\n%s", exit, out)
+		}
+		if d := time.Since(start); d < 50*time.Millisecond {
+			t.Errorf("returned after %v, before the timeout", d)
+		}
+	})
+	t.Run("sigtimedwait delivery", func(t *testing.T) {
+		out, exit := runSignals(t, `
+			pcntl_sigprocmask(SIG_BLOCK, [SIGUSR1]);
+			echo "ready\n";
+			echo pcntl_sigtimedwait([SIGUSR1], $info, 10), ' ', $info['signo'], "\n";`, syscall.SIGUSR1)
+		if exit != 0 || out != "ready\n10 10\n" {
+			t.Errorf("exit %d\n%s", exit, out)
+		}
+	})
+	t.Run("sigwaitinfo delivery", func(t *testing.T) {
+		out, exit := runSignals(t, `
+			pcntl_sigprocmask(SIG_BLOCK, [SIGUSR2]);
+			echo "ready\n";
+			echo pcntl_sigwaitinfo([SIGUSR2], $info), "\n";`, syscall.SIGUSR2)
+		if exit != 0 || out != "ready\n12\n" {
+			t.Errorf("exit %d\n%s", exit, out)
+		}
+	})
+	t.Run("sigwaitinfo interrupted", func(t *testing.T) {
+		// Another signal, with a handler, cuts the wait short.
+		out, exit := runSignals(t, `
+			pcntl_async_signals(true);
+			pcntl_signal(SIGUSR2, fn($n) => print("handler $n\n"));
+			pcntl_sigprocmask(SIG_BLOCK, [SIGUSR1]);
+			echo "ready\n";
+			var_export(@pcntl_sigwaitinfo([SIGUSR1], $info));
+			echo ' ', pcntl_strerror(pcntl_get_last_error()), "\n";`, syscall.SIGUSR2)
+		if exit != 0 || out != "ready\nhandler 12\nfalse Interrupted system call\n" {
 			t.Errorf("exit %d\n%s", exit, out)
 		}
 	})
