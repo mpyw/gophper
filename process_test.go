@@ -246,3 +246,21 @@ func processCancelWhenReady(t *testing.T) (ctx context.Context, ready string, ca
 	}()
 	return ctx, ready, func() time.Time { return <-at }
 }
+
+// TestProcessAbsolutePath starts a program by the path PHP sees, which on
+// Windows is not the host's: /c/x/prog.exe is C:\x\prog.exe. The program is
+// this test binary, which every OS can run.
+func TestProcessAbsolutePath(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, code := runPHP(t, fmt.Sprintf(`
+		$p = proc_open([%q, "-test.run=^$"], [1 => ["pipe", "w"], 2 => ["pipe", "w"]], $pipes) or die("proc_open failed");
+		$out = stream_get_contents($pipes[1]);
+		echo proc_close($p), " ", str_contains($out, "PASS") ? "ran" : $out;
+	`, gophper.HostToGuest(exe)))
+	if code != 0 || out != "0 ran" {
+		t.Errorf("exit %d: %q", code, out)
+	}
+}

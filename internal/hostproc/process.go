@@ -14,6 +14,7 @@ import (
 	"io/fs"
 	"os"
 	"os/exec"
+	pathpkg "path"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -133,7 +134,8 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 	path := read(pathPtr, pathLen)
 	argv := processSplitNUL(read(argvPtr, argvLen))
 	env := processWithBinDir(processSplitNUL(read(envpPtr, envpLen)), p.binDir)
-	cwd, _, ok := p.hostPath(read(cwdPtr, cwdLen))
+	guestCwd := read(cwdPtr, cwdLen)
+	cwd, _, ok := p.hostPath(guestCwd)
 	if !ok {
 		// The working directory has no host directory behind it.
 		return wasi.ENOENT
@@ -141,6 +143,18 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 
 	cmd, ok := processShell(path, argv)
 	if !ok {
+		if strings.Contains(path, "/") {
+			// A path, not a name to look up: PHP's, which is the host's
+			// only on Unix. On Windows, /c/app/x.exe is C:\app\x.exe.
+			if !strings.HasPrefix(path, "/") {
+				path = pathpkg.Join(guestCwd, path)
+			}
+			host, _, ok := p.hostPath(path)
+			if !ok {
+				return wasi.ENOENT
+			}
+			path = host
+		}
 		name, err := processResolve(path, search != 0, cwd, env)
 		if err != nil {
 			return errnoFrom(err)

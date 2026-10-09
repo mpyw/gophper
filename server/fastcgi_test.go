@@ -686,13 +686,14 @@ func TestFastCGIBusy(t *testing.T) {
 		}
 		slow <- res
 	}()
-	// Wait until it holds the instance.
+	// Wait until it holds the instance. The line, not "max active
+	// processes: 1", which the status reports from the start.
 	for deadline := time.Now().Add(5 * time.Second); ; {
 		res, err := dialFCGI(t, addr).do(1, false, params(root, "GET", "/status", nil), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(res.Body, "active processes: 1\n") {
+		if strings.Contains(res.Body, "\nactive processes: 1\n") {
 			break
 		}
 		if time.Now().After(deadline) {
@@ -727,7 +728,7 @@ func TestFastCGIAbort(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if strings.Contains(res.Body, "active processes: 1\n") {
+		if strings.Contains(res.Body, "\nactive processes: 1\n") {
 			break
 		}
 		if time.Now().After(deadline) {
