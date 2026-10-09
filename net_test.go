@@ -21,6 +21,8 @@ import (
 )
 
 // runPHP runs code with the host file system mounted, as the CLI does.
+//
+//declscope:shared // net_test.go and database_test.go
 func runPHP(t *testing.T, code string) (string, int) {
 	t.Helper()
 	var out bytes.Buffer

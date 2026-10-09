@@ -3,6 +3,7 @@
 //	gophper php [php options] [file] [args...]   the php CLI
 //	gophper serve [options]                      an HTTP(S) server for a PHP app
 //	gophper fcgi [options]                       a FastCGI server, like php-fpm
+//	gophper caddy [caddy command]                Caddy, with gophper's module built in
 //
 // Every option can also come from an environment variable: GOPHPER_ and
 // the option's name in upper snake case, such as GOPHPER_MAX_WAIT_TIME.
@@ -25,11 +26,14 @@ import (
 	"syscall"
 	"time"
 
+	caddycmd "github.com/caddyserver/caddy/v2/cmd"
+	_ "github.com/caddyserver/caddy/v2/modules/standard"
 	"github.com/tetratelabs/wazero"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/mpyw/gophper"
+	_ "github.com/mpyw/gophper/caddy"
 	"github.com/mpyw/gophper/server"
 )
 
@@ -100,6 +104,15 @@ func newRootCommand() *cli.Command {
 					"Paths with a segment that starts with \".\" are not found, except /.well-known.",
 				Flags:  append(serveFlags(), phpFlags()...),
 				Action: serveAction,
+			},
+			{
+				Name:      "caddy",
+				Usage:     "run Caddy, with the gophper module and directive built in",
+				ArgsUsage: "[caddy command] [options]",
+				Description: "Every argument goes to Caddy. Try \"gophper caddy php-server\" or\n" +
+					"\"gophper caddy run --config Caddyfile\". See \"gophper caddy help\".",
+				SkipFlagParsing: true,
+				Action:          caddyAction,
 			},
 			{
 				Name:  "fcgi",
@@ -528,6 +541,13 @@ func fcgiAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	fmt.Fprintf(os.Stderr, "gophper: FastCGI on %s\n", listen)
 	return srv.Serve(ctx, l)
+}
+
+// caddyAction hands the arguments to Caddy's own command line. It exits.
+func caddyAction(_ context.Context, cmd *cli.Command) error {
+	os.Args = append([]string{"gophper caddy"}, cmd.Args().Slice()...)
+	caddycmd.Main()
+	return nil
 }
 
 // parseSize reads a byte count such as 64M or 1G. "0" means no limit: -1.

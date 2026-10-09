@@ -80,15 +80,15 @@ func (Handler) CaddyModule() caddy.ModuleInfo {
 	}
 }
 
-// moduleEngine is shared by every handler and every config reload.
+// handlerEngine is shared by every handler and every config reload.
 // Compiling the PHP binaries takes seconds, so it happens once per process.
-var moduleEngine = sync.OnceValues(func() (*gophper.Engine, error) {
+var handlerEngine = sync.OnceValues(func() (*gophper.Engine, error) {
 	return gophper.NewEngine(context.Background(), gophper.DefaultEngineConfig())
 })
 
 // Provision prepares the handler.
 func (h *Handler) Provision(ctx caddy.Context) error {
-	engine, err := moduleEngine()
+	engine, err := handlerEngine()
 	if err != nil {
 		return err
 	}

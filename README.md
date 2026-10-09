@@ -25,7 +25,7 @@ The PHP binaries come from [gophper-wasm](https://github.com/mpyw/gophper-wasm),
 | `gophper php [php options] [file] [args...]` | The php CLI. Every argument goes to PHP. |
 | `gophper serve [options]` | Serves a PHP app over HTTP or HTTPS, with no web server in front |
 | `gophper fcgi [options]` | A FastCGI server, like php-fpm |
-| `gophper-caddy php-server [options]` | Caddy with gophper built in. Automatic HTTPS. |
+| `gophper caddy [caddy arguments]` | Caddy with gophper built in. Automatic HTTPS. |
 
 > [!TIP]
 > A symlink named `php` that points to `gophper` behaves like `gophper php`.
@@ -151,11 +151,12 @@ location ~ \.php(/|$) {
 
 ### Caddy
 
-`gophper-caddy` is Caddy with the standard modules and gophper.
+`gophper caddy` is Caddy with the standard modules and gophper.
+It takes the same arguments as the `caddy` command.
 
 ```sh
-go install github.com/mpyw/gophper/caddy/cmd/gophper-caddy@latest
-gophper-caddy php-server --root ./public --domain example.com
+gophper caddy php-server --root ./public --domain example.com
+gophper caddy run --config Caddyfile
 ```
 
 For a full config, use the `gophper` directive in a Caddyfile:
@@ -229,7 +230,7 @@ code, err := engine.RunCLI(ctx, gophper.Options{
 | --- | --- |
 | `github.com/mpyw/gophper` | `Engine`: runs the CLI or CGI SAPI once per call |
 | `github.com/mpyw/gophper/server` | `HTTPHandler`, an `http.Handler`, and `FastCGIServer`. Both take a `PHPConfig`. |
-| `github.com/mpyw/gophper/caddy` | The Caddy module. A separate Go module, so the core does not depend on Caddy. |
+| `github.com/mpyw/gophper/caddy` | The Caddy module. Only a program that imports it links Caddy. |
 
 `DefaultEngineConfig` keeps wazero's compiled code in a per-user cache directory.
 With the cache, `gophper php -r 'echo 1;'` takes about 0.07 seconds.
@@ -246,10 +247,11 @@ With the cache, `gophper php -r 'echo 1;'` takes about 0.07 seconds.
 | `date`, `pcre`, `hash`, `json`, `random`, `spl`, `uri`, `lexbor` | Works |
 | `openssl`, including HTTPS with certificate checks | Works. The CA bundle is Mozilla's, from gophper-wasm. |
 | `dom`, `xml`, `simplexml`, `xmlreader`, `xmlwriter` | Works |
-| `pdo_sqlite`, `sqlite3`, `zlib` | Works |
+| PDO with `pdo_mysql`, `pdo_pgsql` and `pdo_sqlite` | Works. Tested over TCP, Unix sockets and TLS, with MySQL's `caching_sha2_password` and PostgreSQL's SCRAM. |
+| `sqlite3`, `mysqli`, `zlib` | Works |
 | Fibers | Throws `Fibers are not supported on this platform`. |
 | `proc_open`, `exec`, `posix_*` | Not yet |
-| Other built-in extensions | bcmath, calendar, ctype, exif, fileinfo, filter, iconv, mbstring, mysqli, PDO, pdo_mysql, Phar, posix, session, tokenizer |
+| Other built-in extensions | bcmath, calendar, ctype, exif, fileinfo, filter, iconv, mbstring, Phar, posix, session, tokenizer |
 | Loading extensions at runtime | Works. See [Extensions](#extensions). |
 | Other extensions (`curl`, `intl`, `gd`, `zip`, `pgsql`, ...) | Not built yet |
 

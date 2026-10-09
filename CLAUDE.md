@@ -6,14 +6,13 @@ The Go host that runs PHP from gophper-wasm on wazero. See README.md for the pac
 
 - The PHP binaries live in github.com/mpyw/gophper-wasm. Its ABI.md is the contract with `engine.go`, `instance.go` and `internal/hostnet`.
 - After an ABI change there, bump `engineABIVersion` in `engine.go` to match `phpwasm.ABIVersion`.
-- To work on both at once, point `go.mod` at the local checkout with `replace github.com/mpyw/gophper-wasm => ../gophper-wasm`. `caddy/go.mod` needs its own `replace`, since a dependency's `replace` is ignored.
-- `caddy/` is a separate module, so that the core does not depend on Caddy.
+- To work on both at once, point `go.mod` at the local checkout with `replace github.com/mpyw/gophper-wasm => ../gophper-wasm`, or use a `go.work`.
+- Only `cmd/gophper` and `caddy/` may import Caddy. depguard enforces it, so a program that imports the core links no Caddy code.
 
 ## Before you finish
 
 ```sh
 go vet ./... && go test ./...
-(cd caddy && go vet ./... && go test ./...)
 mise exec -- declscope shrink ./...
 mise exec -- declscope ./...
 ```
@@ -45,3 +44,4 @@ declscope runs with `.declscope.yaml` (`qualify: ondemand`, `exported: true`). R
 | Passing router details in variables and unsetting them | With PHP's built-in `variables_order=EGPCS`, `getenv()` returns a copy of `$_ENV` taken at startup, so `putenv()` cannot hide them. The default php.ini sets `GPCS`, as `php.ini-production` does. |
 | FastCGI running any `SCRIPT_FILENAME` | A web server could pass an uploaded file. `LimitExtensions` defaults to `.php` and `.phar`, like php-fpm's `security.limit_extensions`. |
 | Ignoring the wasm binaries in Git | `go build` would need wasi-sdk, bison and re2c. They are committed in gophper-wasm instead. |
+| `caddy/` as a separate Go module with its own `gophper-caddy` binary | Two binaries to install, and two `replace` lines while developing. The Go linker drops packages nobody imports, so one module costs the core nothing. |
