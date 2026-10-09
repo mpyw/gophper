@@ -390,11 +390,26 @@ func TestSocketAsyncConnect(t *testing.T) {
 
 		$fp = stream_socket_client("tcp://%s", $errno, $errstr, 5, $flags) or die("$errno $errstr");
 		$r = null; $w = [$fp]; $e = null;
-		echo "done: ", stream_select($r, $w, $e, 2) > 0 ? "yes" : "no", "\n";
+		// Only the write set was asked for, so the failure counts once.
+		echo "done: ", stream_select($r, $w, $e, 2), "\n";
 		var_dump(@fwrite($fp, "x"));
 		echo error_get_last()["message"], "\n";
 	`, l.Addr(), closedAddr))
-	want := "writable: yes\necho: async\ndone: yes\nbool(false)\nfwrite(): Send of 1 bytes failed with errno=14 Connection refused\n"
+	want := "writable: yes\necho: async\ndone: 1\nbool(false)\nfwrite(): Send of 1 bytes failed with errno=14 Connection refused\n"
+	if code != 0 || out != want {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
+// A TCP server on an address in use fails at once, as native PHP does.
+// PHP 8.6's TLS-capable tcp:// transport lost listen()'s error.
+func TestSocketListenInUse(t *testing.T) {
+	out, code := runPHP(t, `
+		$a = stream_socket_server("tcp://127.0.0.1:0") or die("first");
+		$addr = stream_socket_get_name($a, false);
+		var_dump(@stream_socket_server("tcp://$addr", $errno, $errstr), $errstr);
+	`)
+	want := "bool(false)\nstring(14) \"Address in use\"\n"
 	if code != 0 || out != want {
 		t.Errorf("exit %d\n%s", code, out)
 	}
