@@ -127,6 +127,12 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 	if tempDir == "" {
 		tempDir = os.TempDir()
 	}
+	// PHP sees it at /tmp whatever its host path, so its real path costs
+	// nothing. wazero failed to read a nested mount, such as a project
+	// under /tmp, below a root that was a symlink, as macOS's /tmp is.
+	if real, err := filepath.EvalSymlinks(tempDir); err == nil {
+		tempDir = real
+	}
 	for _, m := range cfg.Mounts {
 		if !filepath.IsAbs(m.Dir) {
 			return nil, fmt.Errorf("mount %q: not an absolute path", m.Dir)
@@ -294,29 +300,41 @@ func (p *pool) run(ctx context.Context, vars map[string]string, stdin io.Reader,
 	})
 }
 
-// hostPath maps a path inside PHP to the host, as the mounts do.
+// hostPath maps a path inside PHP to the host, as the mounts do. The mount
+// with the longest path wins, as wasi-libc picks among its preopens: a
+// project under /tmp is its own mount, not TempDir's.
 func (p *pool) hostPath(path string) (string, bool, bool) {
-	if rel, ok := strings.CutPrefix(path, "/tmp"); ok && (rel == "" || rel[0] == '/') {
-		return filepath.Join(p.tempDir, rel), true, true
+	type poolPlace struct {
+		guest, host string
+		writable    bool
 	}
-	if rel, ok := strings.CutPrefix(path, poolOpcacheDir); ok && p.opcacheDir != "" && (rel == "" || rel[0] == '/') {
-		return filepath.Join(p.opcacheDir, rel), true, true
+	places := []poolPlace{{guest: "/tmp", host: p.tempDir, writable: true}}
+	if p.opcacheDir != "" {
+		places = append(places, poolPlace{guest: poolOpcacheDir, host: p.opcacheDir, writable: true})
 	}
-	if rel, ok := strings.CutPrefix(path, poolWorkersDir); ok && p.workers != nil && (rel == "" || rel[0] == '/') {
+	if p.workers != nil {
 		// A worker binds its FastCGI socket here.
-		return filepath.Join(p.workers.dir, filepath.FromSlash(rel)), true, true
+		places = append(places, poolPlace{guest: poolWorkersDir, host: p.workers.dir, writable: true})
 	}
-	host, ok := hostpath.Host(path)
-	if !ok {
-		return "", false, false
+	for _, m := range p.mounts {
+		places = append(places, poolPlace{guest: hostpath.Guest(m.Dir), host: m.Dir, writable: !m.ReadOnly})
 	}
-	// The last mount wins, as in the FS config.
-	for _, m := range slices.Backward(p.mounts) {
-		if m.contains(host) {
-			return host, !m.ReadOnly, true
+	best, rest := -1, ""
+	// The last of equal length wins, as in the FS config.
+	for i, pl := range places {
+		r, ok := strings.CutPrefix(path, pl.guest)
+		if !ok || (r != "" && r[0] != '/' && pl.guest != "/") {
+			continue
+		}
+		if best < 0 || len(pl.guest) >= len(places[best].guest) {
+			best, rest = i, r
 		}
 	}
-	return "", false, false
+	if best < 0 {
+		return "", false, false
+	}
+	pl := places[best]
+	return filepath.Join(pl.host, filepath.FromSlash(rest)), pl.writable, true
 }
 
 // logAccess writes a Common Log Format line, plus the time taken.
