@@ -21,18 +21,6 @@ linters:
             - pkg: io/ioutil
               desc: deprecated; use io and os
 
-        # Only the caddy package and the command may use Caddy.
-        caddy-stays-out:
-          files:
-            - $all
-            - "!**/caddy/**"
-            - "!**/cmd/**"
-          deny:
-            - pkg: github.com/caddyserver
-              desc: Caddy belongs to the caddy package, so the rest does not depend on it
-            - pkg: github.com/mpyw/gophper/caddy
-              desc: only the command builds Caddy in
-
         # The library does not log by itself. It returns errors, or writes
         # to an io.Writer its caller passes.
         library-does-not-log:
@@ -54,7 +42,6 @@ linters:
             - "!**/cmd/**"
             - "!**/internal/**"
             - "!**/server/**"
-            - "!**/caddy/**"
             - "!**/testdata/**"
           allow:
             - $gostd
@@ -88,29 +75,10 @@ linters:
             - github.com/tetratelabs/wazero
             - github.com/urfave/cli/v3
             - golang.org/x/crypto/acme/autocert$
-            - github.com/caddyserver/caddy/v2/cmd$
-            - github.com/caddyserver/caddy/v2/modules/standard$
             - github.com/mpyw/gophper$
-            - github.com/mpyw/gophper/caddy$
             - github.com/mpyw/gophper/server$
             - github.com/mpyw/gophper-wasm$
             - github.com/mpyw/gophper-wasm/ext$
-
-        # The Caddy module: gophper's public API inside Caddy.
-        caddy:
-          list-mode: strict
-          files:
-            - "**/caddy/*.go"
-            - "!$test"
-          allow:
-            - $gostd
-            - github.com/caddyserver/caddy/v2
-            - github.com/caddyserver/certmagic$
-            - github.com/dustin/go-humanize$
-            - github.com/spf13/cobra$
-            - go.uber.org/zap$
-            - github.com/mpyw/gophper$
-            - github.com/mpyw/gophper/server$
 
         # The FastCGI protocol stands alone.
         fcgi:
@@ -183,7 +151,6 @@ linters:
           allow:
             - $gostd
             - github.com/tetratelabs/wazero
-            - github.com/caddyserver/caddy/v2
             - github.com/mpyw/gophper$
             - github.com/mpyw/gophper/server$
             - github.com/mpyw/gophper-wasm/ext$

@@ -8,7 +8,6 @@ The Go host that runs PHP from gophper-wasm on wazero. See README.md for the pac
 - After an ABI change there, bump `engineABIVersion` in `engine.go` to match `phpwasm.ABIVersion`.
 - To work on both at once, point `go.mod` at the local checkout with `replace github.com/mpyw/gophper-wasm => ../gophper-wasm`, or use a `go.work`.
 - After `go.mod` changes, run `go generate ./cmd/gophper`. It collects the license files of the linked modules for `gophper licenses`, and a test fails without it.
-- Only `cmd/gophper` and `caddy/` may import Caddy. depguard enforces it, so a program that imports the core links no Caddy code.
 
 ## Before you finish
 
@@ -52,7 +51,6 @@ declscope runs with `.declscope.yaml` (`qualify: ondemand`, `exported: true`). R
 | Giving a child the instance's stdout as is | In `serve`, it is the HTTP response, and a child may outlive the request. `hostproc` hands children a writer that drops output once the run is over. |
 | Host paths and processes on by default in `Options` | A library user who mounts only `/app` expects a sandbox. `HostPath` and `Processes` are off unless set, and the CLI and `server` set them. |
 | Mapping guest paths to host paths by identity in `server` | `/tmp` is `TempDir` there, and a read-only mount must refuse `chmod`. `pool.hostPath` follows the mounts. |
-| Leaving `HOME` unset for a nested `gophper php` | Caddy, linked in, warns at startup without a config directory. The `PHP_BINARY` script sets `XDG_CONFIG_HOME`, and `gophper php` hides it from PHP again. |
 | A path PHP writes and reads again, outside `HostPath` | `stat` then reports uid 0 and mode 0. opcache rejects a file cache entry it does not own, so it compiled every script on every request, and `serve` got two times slower. `pool.hostPath` covers the opcache directory. |
 | Keying opcache's file cache by opcache's system id alone | Two builds of one PHP release share it. `Engine.BuildID` hashes the binaries, and the pool's cache directory goes under it. |
 | A fresh PHP instance for every request | Starting one takes 12 ms, more than most requests. Workers run php-cgi in FastCGI mode on a Unix socket, as php-fpm's children do, and `internal/fcgi.Do` sends them requests. `NoWorkers` keeps the old way. |
@@ -60,4 +58,4 @@ declscope runs with `.declscope.yaml` (`qualify: ondemand`, `exported: true`). R
 | Workers with opcache's file cache only | Laravel took 84 ms, and 23 ms with shared memory. An earlier try with shared memory was slower only because php.wasm had no SHM backend, and opcache recompiled every script. Shared memory is per worker, so `poolOpcacheWorkerINI` sets 64 MB: 128 MB put 4 workers at 1.96 GB RSS. |
 | Interrupting the VM with `interrupt()` for a signal | It sets `EG(timed_out)` too, so a fatal "Maximum execution time" appeared. `wake()` sets only `EG(vm_interrupt)`. A fatal signal is still handled by the guest, which exits quietly with 128 plus the number. |
 | Letting PHP signal any host process | `proc_kill` reaches only the instance's own children. A script cannot kill gophper or other processes. |
-| `caddy/` as a separate Go module with its own `gophper-caddy` binary | Two binaries to install, and two `replace` lines while developing. The Go linker drops packages nobody imports, so one module costs the core nothing. |
+| Caddy built into `gophper` (a `caddy` subcommand and a Caddy module) | It took 160 of the command's 164 Go modules and 65 MB of its binary. Every option was written twice, as a flag and as a Caddyfile subdirective, and bugs such as the php.ini section one came twice. `serve` does automatic HTTPS for one or more domains. Anyone who needs more of Caddy puts it in front of `serve` or `fcgi`. |

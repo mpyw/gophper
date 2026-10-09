@@ -3,7 +3,6 @@
 //	gophper php [php options] [file] [args...]   the php CLI
 //	gophper serve [options]                      an HTTP(S) server for a PHP app
 //	gophper fcgi [options]                       a FastCGI server, like php-fpm
-//	gophper caddy [caddy command]                Caddy, with gophper's module built in
 //
 // Every option can also come from an environment variable: GOPHPER_ and
 // the option's name in upper snake case, such as GOPHPER_MAX_WAIT_TIME.
@@ -27,15 +26,12 @@ import (
 	"syscall"
 	"time"
 
-	caddycmd "github.com/caddyserver/caddy/v2/cmd"
-	_ "github.com/caddyserver/caddy/v2/modules/standard"
 	phpext "github.com/mpyw/gophper-wasm/ext"
 	"github.com/tetratelabs/wazero"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/mpyw/gophper"
-	gophpercaddy "github.com/mpyw/gophper/caddy"
 	"github.com/mpyw/gophper/server"
 )
 
@@ -106,15 +102,6 @@ func newRootCommand() *cli.Command {
 					"Paths with a segment that starts with \".\" are not found, except /.well-known.",
 				Flags:  append(serveFlags(), phpFlags()...),
 				Action: serveAction,
-			},
-			{
-				Name:      "caddy",
-				Usage:     "run Caddy, with the gophper module and directive built in",
-				ArgsUsage: "[caddy command] [options]",
-				Description: "Every argument goes to Caddy. Try \"gophper caddy php-server\" or\n" +
-					"\"gophper caddy run --config Caddyfile\". See \"gophper caddy help\".",
-				SkipFlagParsing: true,
-				Action:          caddyAction,
 			},
 			{
 				Name:   "licenses",
@@ -280,9 +267,9 @@ func serveFlags() []cli.Flag {
 			Usage:   `request body limit, such as 64M or 1G ("0" = no limit)`,
 			Sources: env("MAX_BODY"),
 		},
-		&cli.StringFlag{
+		&cli.StringSliceFlag{
 			Name:    "domain",
-			Usage:   "domain to serve with a Let's Encrypt certificate; also listens on :80 for the challenge",
+			Usage:   "domain to serve with a Let's Encrypt certificate (repeatable); also listens on :80 for the challenge",
 			Sources: env("DOMAIN"),
 		},
 		&cli.StringFlag{
@@ -458,7 +445,7 @@ func phpAction(ctx context.Context, cmd *cli.Command) error {
 	defer signal.Stop(signals)
 	code, err := engine.RunCLI(context.WithoutCancel(ctx), gophper.Options{
 		Args:   cmd.Args().Slice(),
-		Env:    phpBinaryEnv(os.Environ()),
+		Env:    os.Environ(),
 		Dir:    wd,
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
@@ -479,11 +466,11 @@ func phpAction(ctx context.Context, cmd *cli.Command) error {
 }
 
 func serveAction(ctx context.Context, cmd *cli.Command) error {
-	cert, key, domain := cmd.String("tls-cert"), cmd.String("tls-key"), cmd.String("domain")
+	cert, key, domains := cmd.String("tls-cert"), cmd.String("tls-key"), cmd.StringSlice("domain")
 	switch {
 	case (cert == "") != (key == ""):
 		return errors.New("--tls-cert and --tls-key go together")
-	case domain != "" && cert != "":
+	case len(domains) > 0 && cert != "":
 		return errors.New("--domain gets its own certificate; drop --tls-cert and --tls-key")
 	}
 	maxBody, err := parseSize(cmd.String("max-body"))
@@ -525,7 +512,7 @@ func serveAction(ctx context.Context, cmd *cli.Command) error {
 	listen := cmd.String("listen")
 	switch {
 	case listen != "":
-	case domain != "":
+	case len(domains) > 0:
 		listen = ":443"
 	default:
 		listen = "127.0.0.1:8080"
@@ -533,10 +520,10 @@ func serveAction(ctx context.Context, cmd *cli.Command) error {
 	srv := &http.Server{Addr: listen, Handler: h, ReadHeaderTimeout: 30 * time.Second}
 	var servers []*http.Server
 	switch {
-	case domain != "":
+	case len(domains) > 0:
 		m := &autocert.Manager{
 			Prompt:     autocert.AcceptTOS,
-			HostPolicy: autocert.HostWhitelist(domain),
+			HostPolicy: autocert.HostWhitelist(domains...),
 			Cache:      autocert.DirCache(filepath.Join(gophper.DefaultEngineConfig().CacheDir, "autocert")),
 		}
 		srv.TLSConfig = m.TLSConfig()
@@ -679,18 +666,6 @@ func extensionInstallAction(_ context.Context, cmd *cli.Command) error {
 			fmt.Fprintln(cmd.Root().Writer, path)
 		}
 	}
-	return nil
-}
-
-// caddyAction hands the arguments to Caddy's own command line. It exits.
-func caddyAction(_ context.Context, cmd *cli.Command) error {
-	cfg, err := engineConfig(cmd)
-	if err != nil {
-		return err
-	}
-	gophpercaddy.HandlerEngineConfig = func() gophper.EngineConfig { return cfg }
-	os.Args = append([]string{"gophper caddy"}, cmd.Args().Slice()...)
-	caddycmd.Main()
 	return nil
 }
 

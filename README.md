@@ -25,7 +25,6 @@ The PHP binaries come from [gophper-wasm](https://github.com/mpyw/gophper-wasm),
 | `gophper php [php options] [file] [args...]` | The php CLI. Every argument goes to PHP. |
 | `gophper serve [options]` | Serves a PHP app over HTTP or HTTPS, with no web server in front |
 | `gophper fcgi [options]` | A FastCGI server, like php-fpm |
-| `gophper caddy [caddy arguments]` | Caddy with gophper built in. Automatic HTTPS. |
 | `gophper extension list` / `install NAME...` | Lists or installs the extensions that come with gophper. See [Extensions](#extensions). |
 | `gophper licenses` | Prints the licenses of gophper and everything in it |
 
@@ -96,8 +95,13 @@ Requests are routed like Caddy's `php_server`:
 | `--split-path SUFFIX` | Ends a script's path, before `PATH_INFO`. Repeatable. Default: `.php` |
 | `--no-static` | Answers files other than scripts with 404 |
 | `--max-body SIZE` | Limits request bodies, such as `64M`. `0` means no limit. Default: `64M`. A body is read in full before PHP runs, as nginx does. Beyond 1 MiB, it waits in a file in the system's temporary directory. With `0`, that file can grow without limit. |
-| `--domain NAME` | Serves HTTPS with a Let's Encrypt certificate. Also listens on `:80` for the challenge. |
+| `--domain NAME` | Serves HTTPS with a Let's Encrypt certificate. Repeatable. Also listens on `:80` for the challenge. |
 | `--tls-cert FILE`, `--tls-key FILE` | Serves HTTPS with these files |
+
+> [!TIP]
+> For HTTP/3, compression or several sites in one server, put a web server in front.
+> Caddy's `reverse_proxy` can point at `gophper serve`.
+> Caddy's `php_fastcgi` and nginx's `fastcgi_pass` can point at `gophper fcgi`.
 
 For a Laravel-style layout, run from the project directory:
 
@@ -169,48 +173,6 @@ location ~ \.php(/|$) {
 > A child process runs outside the mounts, with the rights of the server.
 > PHP may start one by default, as with php-fpm. Use `--no-processes` to stop it.
 
-### Caddy
-
-`gophper caddy` is Caddy with the standard modules and gophper.
-It takes the same arguments as the `caddy` command.
-
-```sh
-gophper caddy php-server --root ./public --domain example.com
-gophper caddy run --config Caddyfile
-```
-
-For a full config, use the `gophper` directive in a Caddyfile:
-
-```caddyfile
-example.com {
-	encode gzip
-	gophper {
-		root ./public
-		mount . ro
-		mount ./storage
-		concurrency 8
-		php_ini max_execution_time 30
-		env APP_ENV production
-	}
-}
-```
-
-| Subdirective | Same as |
-| --- | --- |
-| `root`, `router`, `index`, `split_path`, `temp_dir`, `concurrency`, `max_wait_time`, `env` | The `serve` options |
-| `processes off` | `--no-processes` |
-| `opcache DIR \| off` | `--opcache-dir`, or `--no-opcache` |
-| `workers off` | `--no-workers` |
-| `max_requests N` | `--max-requests` |
-| `mount DIR [ro]` | `--mount DIR[:ro]` |
-| `front_controller FILE \| off` | `--front-controller` |
-| `file_server off` | `--no-static`, as in FrankenPHP |
-| `max_body SIZE \| off` | `--max-body` |
-| `php_ini_file FILE` | `-c`. A relative path is from Caddy's working directory, as for `root`. |
-| `php_ini KEY VALUE` | `-d` |
-
-To build your own Caddy, import `github.com/mpyw/gophper/caddy`. It registers the `http.handlers.gophper` module.
-
 ### Extensions
 
 Extensions load at runtime, as `.so` files do in native PHP.
@@ -281,7 +243,6 @@ code, err := engine.RunCLI(ctx, gophper.Options{
 | --- | --- |
 | `github.com/mpyw/gophper` | `Engine`: runs the CLI or CGI SAPI once per call |
 | `github.com/mpyw/gophper/server` | `HTTPHandler`, an `http.Handler`, and `FastCGIServer`. Both take a `PHPConfig`. |
-| `github.com/mpyw/gophper/caddy` | The Caddy module. Only a program that imports it links Caddy. |
 
 PHP can call functions written in Go:
 
@@ -325,7 +286,7 @@ Most of it is wazero validating the 16 MB binary, which it does even with the ca
 | Fatal errors, `exit()`, shutdown functions | Works |
 | `max_execution_time`, `set_time_limit()` | Works. The timer runs in Go, since WASI has no signals. |
 | `pcntl`: signals, `pcntl_alarm()`, `pcntl_waitpid()` | Works. `gophper php` passes `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGUSR1` and others to PHP, so `artisan queue:work` stops cleanly. `pcntl_fork()` fails. `pcntl_exec()` runs the program as a child and exits with its status. |
-| opcache | In `serve`, `fcgi` and Caddy, each worker keeps compiled scripts in its own shared memory, 64 MB. A file cache keeps them between workers, and for fresh instances. Raise the size with `-d opcache.memory_consumption=128`. The CLI leaves opcache off, as native PHP does. |
+| opcache | In `serve` and `fcgi`, each worker keeps compiled scripts in its own shared memory, 64 MB. A file cache keeps them between workers, and for fresh instances. Raise the size with `-d opcache.memory_consumption=128`. The CLI leaves opcache off, as native PHP does. |
 | Sockets | Tested: TCP clients and servers, UDP and Unix clients, `stream_select`, and the `http://` wrapper |
 | DNS | Works, through Go's resolver |
 | `date`, `pcre`, `hash`, `json`, `random`, `spl`, `uri`, `lexbor` | Works |

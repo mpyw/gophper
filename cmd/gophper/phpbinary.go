@@ -34,12 +34,7 @@ func phpBinaryScript(cacheDir string, args []string) (string, error) {
 	for _, a := range args {
 		quoted = append(quoted, phpBinaryQuote(a))
 	}
-	// Caddy, linked in, warns at startup without a config directory, as
-	// under "gophper serve", which passes no HOME. The script gives it one,
-	// and phpAction hides both variables from PHP again.
-	script := fmt.Sprintf("#!/bin/sh\n"+
-		"if [ -z \"$HOME$XDG_CONFIG_HOME\" ]; then export XDG_CONFIG_HOME=/nonexistent %s=1; fi\n"+
-		"exec %s php \"$@\"\n", phpBinaryUnsetVar, strings.Join(quoted, " "))
+	script := fmt.Sprintf("#!/bin/sh\nexec %s php \"$@\"\n", strings.Join(quoted, " "))
 
 	base := cacheDir
 	if base == "" {
@@ -73,25 +68,6 @@ func phpBinaryScript(cacheDir string, args []string) (string, error) {
 		return "", err
 	}
 	return path, os.Rename(tmp.Name(), path)
-}
-
-// phpBinaryUnsetVar marks XDG_CONFIG_HOME as set by the script, not by the
-// caller.
-const phpBinaryUnsetVar = "GOPHPER_UNSET_XDG_CONFIG_HOME"
-
-// phpBinaryEnv returns the environment PHP should see: without what the
-// script added.
-func phpBinaryEnv(env []string) []string {
-	if os.Getenv(phpBinaryUnsetVar) == "" {
-		return env
-	}
-	var out []string
-	for _, kv := range env {
-		if !strings.HasPrefix(kv, phpBinaryUnsetVar+"=") && !strings.HasPrefix(kv, "XDG_CONFIG_HOME=") {
-			out = append(out, kv)
-		}
-	}
-	return out
 }
 
 // phpBinaryQuote quotes s for /bin/sh.
