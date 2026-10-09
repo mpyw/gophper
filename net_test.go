@@ -229,19 +229,29 @@ func TestSocketUnixRelative(t *testing.T) {
 		t.Skip(err)
 	}
 	defer func() { _ = os.RemoveAll(dir) }()
-	out, code := runPHP(t, fmt.Sprintf(`
-		chdir(%q);
-		$s = stream_socket_server("unix://rel.sock", $errno, $errstr) or die("$errno $errstr");
-		$c = stream_socket_client("unix://rel.sock", $errno, $errstr, 5) or die("$errno $errstr");
-		echo "connected\n";
-	`, gophper.HostToGuest(dir)))
-	if code != 0 || out != "connected\n" {
-		t.Errorf("exit %d\n%s", code, out)
-	}
-	// Checked from the host: on Windows, a socket file is a reparse point
-	// that WASI does not report.
-	if _, err := os.Lstat(filepath.Join(dir, "rel.sock")); err != nil {
-		t.Errorf("not bound in the directory PHP changed to: %v", err)
+	var out bytes.Buffer
+	code, err := newTestEngine(t).RunCLI(context.Background(), gophper.Options{
+		Args: []string{"-r", fmt.Sprintf(`
+			chdir(%q);
+			$s = stream_socket_server("unix://rel.sock", $errno, $errstr) or die("$errno $errstr");
+			$c = stream_socket_client("unix://rel.sock", $errno, $errstr, 5) or die("$errno $errstr");
+			echo go_bound() ? "bound\n" : "elsewhere\n";
+		`, gophper.HostToGuest(dir))},
+		Stdout:   &out,
+		Stderr:   &out,
+		FS:       gophper.HostFS(),
+		HostPath: gophper.HostPaths,
+		// Checked from the host, while the socket is open: on Windows, a
+		// socket file is a reparse point that WASI does not report.
+		Functions: map[string]gophper.Function{
+			"go_bound": func(context.Context, []any) (any, error) {
+				_, err := os.Lstat(filepath.Join(dir, "rel.sock"))
+				return err == nil, nil
+			},
+		},
+	})
+	if err != nil || code != 0 || out.String() != "bound\n" {
+		t.Errorf("exit %d, %v\n%s", code, err, out.String())
 	}
 }
 
