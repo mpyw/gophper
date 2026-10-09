@@ -313,16 +313,25 @@ func TestCLIPHPBinary(t *testing.T) {
 				t.Errorf("%q %s", out.String(), errOut.String())
 			}
 			want := cliCacheDir
-			if noCache {
-				want = tmp
+			switch {
+			case noCache && runtime.GOOS == "windows":
+				want = filepath.Join(tmp, "gophper")
+			case noCache:
+				want = filepath.Join(tmp, fmt.Sprintf("gophper-%d", os.Getuid()))
 			}
-			// PHP resolves PHP_BINARY with realpath, as macOS's /var is a link.
-			if real, err := filepath.EvalSymlinks(want); err == nil {
-				want = real
+			// The same directory may be spelled two ways: macOS's /var is a
+			// link to /private/var, and Windows has 8.3 short names, such as
+			// RUNNER~1. So the file is looked for in want instead.
+			rel := binary[strings.Index(binary, "/bin/")+1:]
+			if !strings.Contains(binary, "/bin/") {
+				t.Fatalf("PHP_BINARY %q is in no bin directory", binary)
 			}
-			// A guest path: compare it with the host's, as PHP sees it.
-			if !strings.HasPrefix(strings.ToLower(binary), strings.ToLower(gophper.HostToGuest(want))+"/") {
-				t.Errorf("PHP_BINARY %q is not under %q", binary, gophper.HostToGuest(want))
+			mine, err := os.Stat(filepath.Join(want, filepath.FromSlash(rel)))
+			if err != nil {
+				t.Fatalf("PHP_BINARY %q is not under %q: %v", binary, want, err)
+			}
+			if !strings.HasSuffix(binary, "/"+mine.Name()) {
+				t.Errorf("PHP_BINARY %q names another file than %s", binary, mine.Name())
 			}
 		})
 	}

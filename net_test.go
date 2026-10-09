@@ -29,7 +29,9 @@ func runPHP(t *testing.T, code string) (string, int) {
 		Args:   []string{"-r", code},
 		Stdout: &out,
 		Stderr: &out,
-		// As the CLI: the whole host is mounted.
+		// As the CLI: the whole host is mounted, and PHP starts in the
+		// directory the test runs in. On Windows, / is no directory.
+		Dir:       gophper.HostToGuest(netWorkingDir(t)),
 		FS:        gophper.HostFS(),
 		HostPath:  gophper.HostPaths,
 		Processes: true,
@@ -38,6 +40,15 @@ func runPHP(t *testing.T, code string) (string, int) {
 		t.Fatal(err)
 	}
 	return out.String(), exit
+}
+
+func netWorkingDir(t *testing.T) string {
+	t.Helper()
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return wd
 }
 
 // echoServer answers each line with "echo: <line>".
