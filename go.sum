@@ -1,5 +1,5 @@
-github.com/mpyw/gophper-wasm v0.1.0 h1:EWOl4HkB4WBvsCUZAfnQQ53NzEX8HhwFjHOuhtAkhtg=
-github.com/mpyw/gophper-wasm v0.1.0/go.mod h1:6IVNjm5Rq+Zgw5qtzPRePHl7GJudULV/F5uVogl82fw=
+github.com/mpyw/gophper-wasm v0.2.0 h1:HLeggkmuYtBUWDyQTkjfk8Euil+ugnGr62K6Ja7JtZw=
+github.com/mpyw/gophper-wasm v0.2.0/go.mod h1:6IVNjm5Rq+Zgw5qtzPRePHl7GJudULV/F5uVogl82fw=
 github.com/stretchr/testify v1.12.1 h1:EuwCh5fleGS7H32xRwO3wRGT7DxrDhLAT6FF8MpWDWE=
 github.com/stretchr/testify v1.12.1/go.mod h1:MDEgiDPPsNp5cuIrHPPCyornHKgEVbtFUmoNlxoYthg=
 github.com/tetratelabs/wazero v1.12.0 h1:DuWcpNu/FzgEXgGBDp8J1Spc+CWOvvtvVyjKlaZopYU=

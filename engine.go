@@ -17,17 +17,21 @@ import (
 	"github.com/tetratelabs/wazero/imports/wasi_snapshot_preview1"
 	"github.com/tetratelabs/wazero/sys"
 
+	"github.com/mpyw/gophper/internal/dylink"
 	"github.com/mpyw/gophper/internal/hostnet"
 )
 
 // engineABIVersion is the phpwasm.ABIVersion this host implements.
-const engineABIVersion = 1
+const engineABIVersion = 2
 
 // Engine compiles the PHP binaries once and runs them many times.
 // It is safe for concurrent use. Each run gets a fresh PHP instance.
 type Engine struct {
 	runtime wazero.Runtime
 	cache   wazero.CompilationCache
+	// dylink compiles extensions once for every instance.
+	dylink       *dylink.Cache
+	extensionDir string
 	// Each binary is compiled on first use, so a CLI run does not pay for php-cgi.
 	cliModule func() (wazero.CompiledModule, error)
 	cgiModule func() (wazero.CompiledModule, error)
@@ -42,8 +46,9 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 	// WithCloseOnContextDone is left off: its checks made PHP 3.8 times slower.
 	// Runs are stopped through PHP's own interrupt flags instead. See engineInstance.
 	rc := wazero.NewRuntimeConfig().
-		WithCoreFeatures(api.CoreFeaturesV2 | experimental.CoreFeaturesExceptionHandling)
-	e := &Engine{}
+		// Extended constant expressions place a side module's data at __memory_base.
+		WithCoreFeatures(api.CoreFeaturesV2 | experimental.CoreFeaturesExceptionHandling | experimental.CoreFeaturesExtendedConst)
+	e := &Engine{extensionDir: cfg.ExtensionDir}
 	if cfg.CacheDir != "" {
 		cache, err := wazero.NewCompilationCacheWithDir(cfg.CacheDir)
 		if err != nil {
@@ -53,6 +58,7 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 		rc = rc.WithCompilationCache(cache)
 	}
 	e.runtime = wazero.NewRuntimeWithConfig(ctx, rc)
+	e.dylink = dylink.NewCache(e.runtime)
 	if _, err := wasi_snapshot_preview1.Instantiate(ctx, e.runtime); err != nil {
 		e.Close(ctx)
 		return nil, err
@@ -62,6 +68,12 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 	hostnet.ExportSockets(host, func(ctx context.Context) *hostnet.Sockets {
 		if inst := engineInstanceFrom(ctx); inst != nil {
 			return inst.sockets
+		}
+		return nil
+	})
+	dylink.Export(host, func(ctx context.Context) *dylink.Linker {
+		if inst := engineInstanceFrom(ctx); inst != nil {
+			return inst.linker
 		}
 		return nil
 	})
@@ -83,6 +95,9 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 			b, err := bin()
 			if err != nil {
 				return nil, fmt.Errorf("decompress %s: %w", name, err)
+			}
+			if err := e.dylink.AddMain(b); err != nil {
+				return nil, fmt.Errorf("%s: %w", name, err)
 			}
 			m, err := e.runtime.CompileModule(compileCtx, b)
 			if err != nil {
@@ -122,14 +137,18 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 	if err != nil {
 		return 0, err
 	}
-	inst := newEngineInstance(ctx)
+	inst := newEngineInstance(ctx, e.dylink)
 	defer inst.sockets.Close()
+	defer inst.linker.Close(context.WithoutCancel(ctx))
 
 	fs := opts.FS
 	if fs == nil {
 		fs = wazero.NewFSConfig()
 	}
 	fs = fs.WithFSMount(hostnet.SocketPlaceholderFS, hostnet.SocketPlaceholderDir)
+	if e.extensionDir != "" {
+		fs = fs.WithReadOnlyDirMount(e.extensionDir, engineExtensionDir)
+	}
 
 	mc := wazero.NewModuleConfig().
 		// _start is called below, once the interrupt flags are located.
@@ -172,8 +191,13 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 		return 0, err
 	}
 	defer inst.setTimeout(0)
+	if err := ctx.Err(); err != nil {
+		return 0, err
+	}
 	// Canceling stops the script the same way a timeout does.
-	defer context.AfterFunc(ctx, inst.interrupt)()
+	done := make(chan struct{})
+	defer close(done)
+	defer context.AfterFunc(ctx, func() { inst.interruptUntil(done) })()
 
 	_, err = m.ExportedFunction("_start").Call(context.WithValue(ctx, engineInstanceKey{}, inst))
 	code := 0
@@ -186,10 +210,16 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 	return code, err
 }
 
+// engineExtensionDir is php.wasm's extension_dir (gophper-wasm's ABI.md).
+const engineExtensionDir = "/gophper/extensions"
+
 // EngineConfig configures an Engine.
 type EngineConfig struct {
 	// CacheDir stores compiled machine code between processes. Empty disables the cache.
 	CacheDir string
+	// ExtensionDir holds extensions built by gophper-wasm's scripts/build-ext.sh.
+	// PHP loads them with extension=<name> or dl(). Empty means none.
+	ExtensionDir string
 }
 
 // DefaultEngineConfig caches compiled code in a per-user directory.

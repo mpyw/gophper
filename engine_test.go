@@ -32,7 +32,6 @@ func runCLI(t *testing.T, stdin string, args ...string) (string, int) {
 	return out.String(), code
 }
 
-
 func TestSmoke(t *testing.T) {
 	script, err := filepath.Abs("testdata/smoke.php")
 	if err != nil {
@@ -144,5 +143,23 @@ func TestCancel(t *testing.T) {
 	_, err := newTestEngine(t).RunCLI(ctx, gophper.Options{Args: []string{"-r", `for (;;) {}`}})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("err = %v, want context.DeadlineExceeded", err)
+	}
+}
+
+// A cancel that arrives while PHP is still starting must not be lost:
+// php_request_startup() clears the interrupt flags.
+func TestCancelDuringStartup(t *testing.T) {
+	e := newTestEngine(t)
+	for _, delay := range []time.Duration{0, time.Millisecond, 5 * time.Millisecond} {
+		ctx, cancel := context.WithTimeout(context.Background(), delay)
+		start := time.Now()
+		_, err := e.RunCLI(ctx, gophper.Options{Args: []string{"-r", `for (;;) {}`}})
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) {
+			t.Errorf("delay %s: err = %v", delay, err)
+		}
+		if d := time.Since(start); d > 2*time.Second {
+			t.Errorf("delay %s: took %s", delay, d)
+		}
 	}
 }

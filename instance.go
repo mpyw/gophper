@@ -11,6 +11,7 @@ import (
 	"github.com/tetratelabs/wazero/api"
 	"github.com/tetratelabs/wazero/experimental"
 
+	"github.com/mpyw/gophper/internal/dylink"
 	"github.com/mpyw/gophper/internal/hostnet"
 )
 
@@ -31,6 +32,7 @@ import (
 type engineInstance struct {
 	ctx     context.Context
 	sockets *hostnet.Sockets
+	linker  *dylink.Linker
 	memory  engineMemory
 
 	// Addresses of EG(vm_interrupt), EG(timed_out) and EG(hard_timeout).
@@ -42,8 +44,8 @@ type engineInstance struct {
 	interrupted chan struct{}
 }
 
-func newEngineInstance(ctx context.Context) *engineInstance {
-	inst := &engineInstance{ctx: ctx, interrupted: make(chan struct{})}
+func newEngineInstance(ctx context.Context, extensions *dylink.Cache) *engineInstance {
+	inst := &engineInstance{ctx: ctx, interrupted: make(chan struct{}), linker: dylink.NewLinker(extensions)}
 	inst.sockets = hostnet.NewSockets(inst)
 	return inst
 }
@@ -141,6 +143,22 @@ func (i *engineInstance) interrupt() {
 	close(i.interrupted)
 	i.interrupted = make(chan struct{})
 	i.mu.Unlock()
+}
+
+// interruptUntil raises interrupts until done is closed. One interrupt can
+// be lost: php_request_startup() clears the flags, so a cancel that arrives
+// before it would leave a script running forever.
+func (i *engineInstance) interruptUntil(done <-chan struct{}) {
+	t := time.NewTicker(100 * time.Millisecond)
+	defer t.Stop()
+	for {
+		i.interrupt()
+		select {
+		case <-done:
+			return
+		case <-t.C:
+		}
+	}
 }
 
 // nanosleep sleeps like nanosleep(2), but returns early on an interrupt or

@@ -117,6 +117,30 @@ gophper-caddy run --config Caddyfile
 
 To build your own Caddy, import `github.com/mpyw/gophper/caddy`. It registers the `http.handlers.gophper` module.
 
+### Extensions
+
+Extensions load at runtime, as `.so` files do in native PHP.
+Each one is a WebAssembly module built by gophper-wasm, so one file runs on every platform.
+
+```sh
+gophper --extension-dir ./extensions php -d extension=dl_test -r 'echo dl_test_test2("ext"), "\n";'
+```
+
+```
+Hello ext
+```
+
+| Way to set the directory | Example |
+| --- | --- |
+| Flag, before the subcommand | `gophper --extension-dir DIR serve` |
+| Environment | `GOPHPER_EXTENSION_DIR=DIR` |
+| Go | `EngineConfig.ExtensionDir` |
+
+`extension=<name>` in php.ini, `-d extension=<name>`, and `dl("<name>.so")` all work.
+
+> [!NOTE]
+> Only `dl_test`, php-src's test extension, is published so far.
+
 ### From Go
 
 ```go
@@ -154,7 +178,9 @@ With the cache, `gophper php -r 'echo 1;'` takes about 0.07 seconds.
 | `date`, `pcre`, `hash`, `json`, `random`, `spl`, `uri`, `lexbor` | Works |
 | Fibers | Throws `Fibers are not supported on this platform`. |
 | `proc_open`, `exec`, `posix_*` | Not yet |
-| Other extensions (`pdo`, `mbstring`, `intl`, `openssl`, ...) | Not built yet |
+| Built-in extensions | bcmath, calendar, ctype, exif, fileinfo, filter, iconv, mbstring, mysqli, PDO, pdo_mysql, Phar, posix, session, tokenizer, and the core ones |
+| Loading extensions at runtime | Works. See [Extensions](#extensions). |
+| Other extensions (`openssl`, `curl`, `intl`, `gd`, `pdo_sqlite`, ...) | Not built yet |
 
 > [!NOTE]
 > A script blocked reading a socket is not stopped by `max_execution_time`.

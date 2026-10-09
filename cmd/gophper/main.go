@@ -57,6 +57,13 @@ func newRootCommand() *cli.Command {
 		Usage: "run PHP on WebAssembly, with no cgo",
 		// main prints errors and exits; urfave/cli must not do it as well.
 		ExitErrHandler: func(context.Context, *cli.Command, error) {},
+		Flags: []cli.Flag{
+			&cli.StringFlag{
+				Name:    "extension-dir",
+				Usage:   "directory of extensions (.so wasm side modules) that extension= and dl() load",
+				Sources: cli.EnvVars("GOPHPER_EXTENSION_DIR"),
+			},
+		},
 		Commands: []*cli.Command{
 			{
 				Name:      "php",
@@ -105,6 +112,18 @@ func newRootCommand() *cli.Command {
 	}
 }
 
+func newEngine(ctx context.Context, cmd *cli.Command) (*gophper.Engine, error) {
+	cfg := gophper.DefaultEngineConfig()
+	if dir := cmd.String("extension-dir"); dir != "" {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return nil, err
+		}
+		cfg.ExtensionDir = abs
+	}
+	return gophper.NewEngine(ctx, cfg)
+}
+
 // cgiFlags are the options serve and fcgi share.
 func cgiFlags() []cli.Flag {
 	return []cli.Flag{
@@ -139,7 +158,7 @@ func phpAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	engine, err := gophper.NewEngine(ctx, gophper.DefaultEngineConfig())
+	engine, err := newEngine(ctx, cmd)
 	if err != nil {
 		return err
 	}
@@ -168,7 +187,7 @@ func serveAction(ctx context.Context, cmd *cli.Command) error {
 		return errors.New("--tls-cert and --tls-key go together")
 	}
 
-	engine, err := gophper.NewEngine(ctx, gophper.DefaultEngineConfig())
+	engine, err := newEngine(ctx, cmd)
 	if err != nil {
 		return err
 	}
@@ -218,7 +237,7 @@ func fcgiAction(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 
-	engine, err := gophper.NewEngine(ctx, gophper.DefaultEngineConfig())
+	engine, err := newEngine(ctx, cmd)
 	if err != nil {
 		return err
 	}
