@@ -83,54 +83,14 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 		return nil, errors.Join(err, e.Close(ctx))
 	}
 	host := e.runtime.NewHostModuleBuilder("gophper")
-	hostvm.ExportVM(host, func(ctx context.Context) *hostvm.VM {
-		if inst := engineInstanceFrom(ctx); inst != nil {
-			return inst.vm
-		}
-		return nil
-	})
-	hostsig.ExportSignals(host, func(ctx context.Context) *hostsig.Signals {
-		if inst := engineInstanceFrom(ctx); inst != nil {
-			return inst.signals
-		}
-		return nil
-	})
-	hostnet.ExportSockets(host, func(ctx context.Context) *hostnet.Sockets {
-		if inst := engineInstanceFrom(ctx); inst != nil {
-			return inst.sockets
-		}
-		return nil
-	})
-	dylink.Export(host, func(ctx context.Context) *dylink.Linker {
-		if inst := engineInstanceFrom(ctx); inst != nil {
-			return inst.linker
-		}
-		return nil
-	})
-	hostproc.ExportProcesses(host, func(ctx context.Context) *hostproc.Processes {
-		if inst := engineInstanceFrom(ctx); inst != nil {
-			return inst.processes
-		}
-		return nil
-	})
-	hostsys.ExportSystem(host, func(ctx context.Context) *hostsys.System {
-		if inst := engineInstanceFrom(ctx); inst != nil {
-			return inst.system
-		}
-		return nil
-	})
-	hostfn.ExportFunctions(host, func(ctx context.Context) *hostfn.Functions {
-		if inst := engineInstanceFrom(ctx); inst != nil {
-			return inst.functions
-		}
-		return nil
-	})
-	hostnet.ExportDNS(host, func(ctx context.Context) wasi.Run {
-		if inst := engineInstanceFrom(ctx); inst != nil {
-			return inst.vm
-		}
-		return nil
-	})
+	hostvm.ExportVM(host, engineFrom(func(i *engineInstance) *hostvm.VM { return i.vm }))
+	hostsig.ExportSignals(host, engineFrom(func(i *engineInstance) *hostsig.Signals { return i.signals }))
+	hostnet.ExportSockets(host, engineFrom(func(i *engineInstance) *hostnet.Sockets { return i.sockets }))
+	dylink.Export(host, engineFrom(func(i *engineInstance) *dylink.Linker { return i.linker }))
+	hostproc.ExportProcesses(host, engineFrom(func(i *engineInstance) *hostproc.Processes { return i.processes }))
+	hostsys.ExportSystem(host, engineFrom(func(i *engineInstance) *hostsys.System { return i.system }))
+	hostfn.ExportFunctions(host, engineFrom(func(i *engineInstance) *hostfn.Functions { return i.functions }))
+	hostnet.ExportDNS(host, engineFrom(func(i *engineInstance) wasi.Run { return i.vm }))
 	if _, err := host.Instantiate(ctx); err != nil {
 		return nil, errors.Join(err, e.Close(ctx))
 	}

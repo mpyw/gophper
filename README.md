@@ -169,7 +169,7 @@ Requests are routed like Caddy's `php_server`:
 | --- | --- |
 | `--listen ADDR` | Default: `127.0.0.1:8080`, or `:443` with `--domain` |
 | `--root DIR` | The document root. It must be inside a `--mount`. Default: `.` |
-| `--router FILE` | Runs for every request, as with `php -S`. If it returns `false`, the file is sent as is. |
+| `--router FILE` | Runs for every request, as with `php -S`. If it returns `false`, the script the path names runs, or the file is sent. |
 | `--index FILE` | A file a directory runs. Repeatable. Default: `index.php` |
 | `--front-controller FILE` | Runs for paths that are not files. `off` answers 404. Default: `index.php` |
 | `--split-path SUFFIX` | Ends a script's path, before `PATH_INFO`. Repeatable. Default: `.php` |

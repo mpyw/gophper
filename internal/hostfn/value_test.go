@@ -84,6 +84,8 @@ func TestValueEncodeErrors(t *testing.T) {
 		func() {},
 		map[float64]int{1.5: 1},
 		map[any]any{1.5: 1},
+		// Two keys that are neither integers nor strings compare equal.
+		map[any]any{1.5: 1, 2.5: 2},
 		map[any]any{nil: 1},
 		map[uint]int{1: 1},
 		[]any{1, make(chan int)},
@@ -108,6 +110,7 @@ func TestValueDecodeErrors(t *testing.T) {
 		"short count":  {valueArray, 0},
 		"no key":       arr(1),
 		"no value":     arr(1, valueTestInt(0)...),
+		"bad key":      arr(1, '?', valueNull),
 		"huge count":   arr(1<<32-1, valueNull, valueNull),
 		"unknown tag":  {'?'},
 	} {

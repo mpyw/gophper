@@ -155,9 +155,12 @@ func dnsExchange(ctx context.Context, server string, q []byte, id uint16) ([]byt
 	return answer, nil
 }
 
+// dnsHostServers finds the host's nameservers. Tests replace it.
+var dnsHostServers = dnsSystemServers
+
 // dnsServers returns the host's nameservers, as host:port.
 func dnsServers() []string {
-	servers := dnsSystemServers()
+	servers := dnsHostServers()
 	if len(servers) == 0 {
 		// The default of glibc and Go's resolver.
 		servers = []string{"127.0.0.1:53", "[::1]:53"}

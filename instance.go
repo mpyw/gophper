@@ -54,6 +54,18 @@ func engineInstanceFrom(ctx context.Context) *engineInstance {
 	return inst
 }
 
+// engineFrom returns a function that finds one part of the instance a host
+// call comes from, or the zero value outside any.
+func engineFrom[T any](part func(*engineInstance) T) func(context.Context) T {
+	return func(ctx context.Context) T {
+		if inst := engineInstanceFrom(ctx); inst != nil {
+			return part(inst)
+		}
+		var zero T
+		return zero
+	}
+}
+
 // forwardSignals delivers what arrives on ch until done is closed.
 func (i *engineInstance) forwardSignals(ch <-chan os.Signal, done <-chan struct{}) {
 	for {

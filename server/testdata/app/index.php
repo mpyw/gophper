@@ -15,8 +15,20 @@ if ($path === '/bad-status') {
     header('Status: 42 Nonsense');
     exit;
 }
+if ($path === '/text-status') {
+    // Not a number: the status stays 200.
+    header('Status: none');
+    exit;
+}
+if ($path === '/space-status') {
+    // Only a no-break space, which Go counts as space and textproto keeps: no
+    // status at all, which is a 502.
+    header("Status: \u{a0}");
+    exit;
+}
 if ($path === '/real-ip') {
     echo $_SERVER['HTTP_X_REAL_IP'] ?? 'none', "\n";
+    echo $_SERVER['HTTP_PROXY'] ?? 'no proxy', "\n";
     exit;
 }
 if ($path === '/post') {

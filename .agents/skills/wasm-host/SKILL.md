@@ -53,3 +53,4 @@ The root package is the public API and the wiring. Everything else is in `intern
 | Naming a Unix socket by `hostpath.Guest` of its host path | A mount can put a path elsewhere, as `server` does with `/tmp`. `stream_socket_get_name` then showed the host path. `Sockets` keeps the path PHP gave for each host path. |
 | Accepting any connection for a Windows `socketpair` | Another local process could connect first and take one end. `socketPairAccept` keeps only the connection from the dialer's own address. |
 | Leaving the timers of a run to fire on their own | A hard timeout could re-arm after `SetTimeout(0)`, and a signal's grace timer outlived the run by 5 seconds. `VM.Stop` and `Signals.Stop` end them with the run. |
+| Resolving a relative Unix socket path on the host | The host has no working directory of the guest's: `chdir()` happens in wasi-libc. gophper-wasm's `gophper_net.c` makes the path absolute, as `gophper_abs` does for files. |

@@ -2,6 +2,7 @@ package server_test
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"io"
@@ -82,6 +83,13 @@ func TestHTTPRouting(t *testing.T) {
 		{"/created", "201", "created\n"},
 		{"/redirect", "302", ""},
 		{"/bad-status", "502", ""},
+		{"/text-status", "200", ""},
+		{"/space-status", "502", ""},
+		{"/sub?x=1", "301", ""},
+		{"/missing.php", "200", ""},
+		// Lowering these changes their length in Go, which once panicked.
+		{"/%FF%FF.php", "200", ""},
+		{"/%C4%B0.php/x", "200", ""},
 	} {
 		res, body := get(t, srv.URL+tc.path)
 		if got := res.Status[:3]; got != tc.status || (tc.body != "" && body != tc.body) {
@@ -89,6 +97,9 @@ func TestHTTPRouting(t *testing.T) {
 		}
 		if tc.path == "/sub" && res.Header.Get("Location") != "/sub/" {
 			t.Errorf("/sub: Location %q", res.Header.Get("Location"))
+		}
+		if tc.path == "/sub?x=1" && res.Header.Get("Location") != "/sub/?x=1" {
+			t.Errorf("/sub?x=1: Location %q", res.Header.Get("Location"))
 		}
 		if tc.path == "/redirect" && res.Header.Get("Location") != "/target" {
 			t.Errorf("/redirect: Location %q", res.Header.Get("Location"))
@@ -163,7 +174,8 @@ func TestHTTPPost(t *testing.T) {
 // A header name with an underscore would pass for one with a dash.
 func TestHTTPHeaderUnderscore(t *testing.T) {
 	srv := startHTTP(t)
-	for header, want := range map[string]string{"X-Real-IP": "trusted\n", "X-Real_IP": "none\n"} {
+	// Proxy too, which PHP would read as HTTP_PROXY (httpoxy).
+	for header, want := range map[string]string{"X-Real-IP": "trusted\nno proxy\n", "X-Real_IP": "none\nno proxy\n", "Proxy": "none\nno proxy\n"} {
 		req, err := http.NewRequest(http.MethodGet, srv.URL+"/real-ip", nil)
 		if err != nil {
 			t.Fatal(err)
@@ -260,6 +272,18 @@ func TestHTTPProjectLayout(t *testing.T) {
 	}
 }
 
+func TestHTTPBadMount(t *testing.T) {
+	engine, err := gophper.NewEngine(context.Background(), gophper.DefaultEngineConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = engine.Close(context.Background()) }()
+	_, err = server.NewHTTPHandler(engine, server.HTTPConfig{Root: "testdata/app", PHPConfig: server.PHPConfig{Mounts: []server.Mount{{Dir: "relative"}}}})
+	if err == nil || !strings.Contains(err.Error(), "not an absolute path") {
+		t.Errorf("err = %v", err)
+	}
+}
+
 func TestHTTPRootOutsideMounts(t *testing.T) {
 	engine, err := gophper.NewEngine(context.Background(), gophper.DefaultEngineConfig())
 	if err != nil {
@@ -286,12 +310,79 @@ func TestHTTPRouter(t *testing.T) {
 	if res.StatusCode != 200 || body != want {
 		t.Errorf("%d %q", res.StatusCode, body)
 	}
+	// The root is the front controller, with no path info.
+	res, body = get(t, srv.URL+"/")
+	if want := "router: / script /index.php path info - cwd public\nrouter env leaked: false\n"; res.StatusCode != 200 || body != want {
+		t.Errorf("/: %d %q", res.StatusCode, body)
+	}
 	// return false sends the file as is, and a missing one is 404.
 	if res, body := get(t, srv.URL+"/robots.txt"); res.StatusCode != 200 || body != "static\n" {
 		t.Errorf("robots.txt: %d %q", res.StatusCode, body)
 	}
 	if res, _ := get(t, srv.URL+"/missing.txt"); res.StatusCode != http.StatusNotFound {
 		t.Errorf("missing.txt: %d", res.StatusCode)
+	}
+}
+
+// TestHTTPRouterScript describes the script a path names, as php -S does
+// for its router.
+func TestHTTPRouterScript(t *testing.T) {
+	root := t.TempDir()
+	for name, src := range map[string]string{
+		"router.php": `<?php
+			if (str_starts_with($_SERVER['REQUEST_URI'], '/pass/')) {
+				return false;
+			}
+			echo $_SERVER['SCRIPT_NAME'], " [", $_SERVER['PATH_INFO'] ?? '-', "]\n";`,
+		"sub/page.php":  `<?php`,
+		"pass/run.PHP":  `<?php echo "ran: ", file_get_contents('php://input'), "\n";`,
+		"pass/file.txt": "static\n",
+	} {
+		if err := os.MkdirAll(filepath.Dir(filepath.Join(root, name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, name), []byte(src), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	srv := startHTTPWith(t, func(cfg *server.HTTPConfig) {
+		cfg.Root = root
+		cfg.Router = "router.php"
+		cfg.MaxBodySize = 1024
+	})
+	for path, want := range map[string]string{
+		"/sub/page.php":   "/sub/page.php [-]\n",
+		"/sub/page.php/x": "/sub/page.php [/x]\n",
+	} {
+		if res, body := get(t, srv.URL+path); res.StatusCode != 200 || body != want {
+			t.Errorf("%s: %d %q, want %q", path, res.StatusCode, body, want)
+		}
+	}
+	// After return false, a script runs with the same body, and is never
+	// sent as a file. Other files are.
+	res, err := http.Post(srv.URL+"/pass/run.PHP", "text/plain", strings.NewReader("body"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := io.ReadAll(res.Body)
+	_ = res.Body.Close() // read in full
+	if err != nil || res.StatusCode != 200 || string(b) != "ran: body\n" {
+		t.Errorf("pass to a script: %d %q, %v", res.StatusCode, b, err)
+	}
+	if res, body := get(t, srv.URL+"/pass/file.txt"); res.StatusCode != 200 || body != "static\n" {
+		t.Errorf("pass to a file: %d %q", res.StatusCode, body)
+	}
+	if res, _ := get(t, srv.URL+"/pass/missing"); res.StatusCode != http.StatusNotFound {
+		t.Errorf("pass to nothing: %d", res.StatusCode)
+	}
+	// The router reads no body larger than MaxBodySize either.
+	res, err = http.Post(srv.URL+"/sub/page.php", "text/plain", strings.NewReader(strings.Repeat("x", 2048)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = res.Body.Close() // only the status matters
+	if res.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Errorf("a large body: %d", res.StatusCode)
 	}
 }
 
@@ -393,5 +484,40 @@ func TestHTTPScriptSourceStaysHidden(t *testing.T) {
 		if strings.Contains(body, "<?php") {
 			t.Errorf("%s sent the source: %q", p, body)
 		}
+	}
+}
+
+// TestHTTPEngineClosed answers 502 when PHP cannot run at all, and logs why.
+func TestHTTPEngineClosed(t *testing.T) {
+	engine, err := gophper.NewEngine(context.Background(), gophper.DefaultEngineConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var log bytes.Buffer
+	var mu sync.Mutex
+	h, err := server.NewHTTPHandler(engine, server.HTTPConfig{Root: "testdata/app", PHPConfig: server.PHPConfig{
+		TempDir: t.TempDir(),
+		ErrorLog: writerFunc(func(p []byte) (int, error) {
+			mu.Lock()
+			defer mu.Unlock()
+			return log.Write(p)
+		}),
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = h.Close() }()
+	if err := engine.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(h)
+	defer srv.Close()
+	if res, _ := get(t, srv.URL+"/"); res.StatusCode != http.StatusBadGateway {
+		t.Errorf("status %d", res.StatusCode)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if !strings.Contains(log.String(), "gophper: /index.php") {
+		t.Errorf("log %q", log.String())
 	}
 }

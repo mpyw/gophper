@@ -11,9 +11,12 @@ import (
 	"strings"
 )
 
+// dnsResolvConf is where dnsSystemServers looks. Tests replace it.
+var dnsResolvConf = "/etc/resolv.conf"
+
 // dnsSystemServers reads the nameservers of /etc/resolv.conf.
 func dnsSystemServers() []string {
-	f, err := os.Open("/etc/resolv.conf")
+	f, err := os.Open(dnsResolvConf)
 	if err != nil {
 		return nil
 	}

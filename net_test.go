@@ -221,6 +221,25 @@ func TestSocketUnixSandbox(t *testing.T) {
 	}
 }
 
+// TestSocketUnixRelative binds and connects to a relative path, against
+// the working directory PHP changed to.
+func TestSocketUnixRelative(t *testing.T) {
+	dir, err := os.MkdirTemp(netShortTempBase(), "gophper")
+	if err != nil {
+		t.Skip(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	out, code := runPHP(t, fmt.Sprintf(`
+		chdir(%q);
+		$s = stream_socket_server("unix://rel.sock", $errno, $errstr) or die("$errno $errstr");
+		$c = stream_socket_client("unix://rel.sock", $errno, $errstr, 5) or die("$errno $errstr");
+		echo file_exists(%q) ? "bound\n" : "missing\n";
+	`, gophper.HostToGuest(dir), gophper.HostToGuest(filepath.Join(dir, "rel.sock"))))
+	if code != 0 || out != "bound\n" {
+		t.Errorf("exit %d\n%s", code, out)
+	}
+}
+
 // TestSocketUnixMappedName binds a Unix socket at a path that HostPath puts
 // elsewhere. PHP reads back the path it gave, not the host's.
 func TestSocketUnixMappedName(t *testing.T) {

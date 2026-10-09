@@ -54,3 +54,23 @@ func TestPHPBinaryScriptFallback(t *testing.T) {
 		t.Error("a symlink was accepted")
 	}
 }
+
+// TestPHPBinaryScriptErrors fails where the directory cannot be made.
+func TestPHPBinaryScriptErrors(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no PHP_BINARY on Windows")
+	}
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// A cache directory that is a file.
+	if _, err := phpBinaryScript(file, nil); err == nil {
+		t.Error("a file as the cache directory was accepted")
+	}
+	// No temporary directory.
+	t.Setenv("TMPDIR", filepath.Join(file, "tmp"))
+	if _, err := phpBinaryScript("", nil); err == nil {
+		t.Error("a missing temporary directory was accepted")
+	}
+}

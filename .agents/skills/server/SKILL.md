@@ -43,3 +43,7 @@ description: Change gophper serve or gophper fcgi - routing, workers, the pool, 
 | Using a web server's `SCRIPT_FILENAME` spelling as is | Windows matches paths without case, so `C:\App\x.php` passed the mount check for `C:\app`. Its guest path `/c/App/x.php` matched no wazero mount. `pool.mountSpelling` rewrites it with the mount's spelling. |
 | Passing `X-Real_IP` on as `HTTP_X_REAL_IP` | It would pass for `X-Real-IP`, which a proxy in front sets. Header names with `_` are dropped, as nginx and Apache do. |
 | Calling `WriteHeader` with whatever `Status:` PHP sent | net/http panics outside 100-999. A code below 200 or above 999 is a 502. |
+| `strings.ToLower` to match SplitPath without case | It changes the length of invalid UTF-8 and of some letters, and `splitScript` indexes the original with its positions. `/%FF%FF.php` panicked. `httpLowerASCII` lowers A to Z only. |
+| Sending the file as is when a router returns false | `/index.php` then sent PHP source. As `php -S` does, the script the path names runs, with the same body, which `readBody` reads once. |
+| Taking 8.3 short names on Windows as plain names | `GIT~1` is `.git`, which `httpHidden` would not see. `httpUnsafe` rejects a tilde before a digit. |
+| Clearing the FastCGI read deadline at `FCGI_BEGIN_REQUEST` | A client that sent nothing more held the connection forever. So did a kept-alive one after its first request, since the reader was already blocked without a deadline. The idle deadline holds until the params are in, and `handle` sets it again before `FCGI_END_REQUEST`. |

@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"os"
 	"path/filepath"
@@ -224,5 +225,98 @@ func TestPoolMountSpelling(t *testing.T) {
 		if got := p.mountSpelling(in); got != want {
 			t.Errorf("mountSpelling(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// TestPoolRunCanceledWhileWaiting gives up waiting for a free instance when
+// the request goes away.
+func TestPoolRunCanceledWhileWaiting(t *testing.T) {
+	p, vars := poolForTest(t)
+	for range cap(p.sem) {
+		p.sem <- struct{}{}
+	}
+	defer func() {
+		for range cap(p.sem) {
+			<-p.sem
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := p.run(ctx, vars, nil, io.Discard, io.Discard); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v", err)
+	}
+}
+
+func TestPoolLogAccess(t *testing.T) {
+	var log bytes.Buffer
+	p := &pool{accessLog: &log}
+	start := time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC)
+	p.logAccess("", "GET", "/x", "HTTP/1.1", 200, 5, start)
+	p.logAccess("192.0.2.1:1234", "POST", "/y", "HTTP/2.0", 404, 0, start)
+	want := []string{
+		`- - - [02/Jan/2026:03:04:05 +0000] "GET /x HTTP/1.1" 200 5 `,
+		`192.0.2.1 - - [02/Jan/2026:03:04:05 +0000] "POST /y HTTP/2.0" 404 0 `,
+	}
+	lines := strings.Split(strings.TrimSuffix(log.String(), "\n"), "\n")
+	if len(lines) != 2 || !strings.HasPrefix(lines[0], want[0]) || !strings.HasPrefix(lines[1], want[1]) {
+		t.Errorf("logged %q", log.String())
+	}
+}
+
+func TestINISpecialSection(t *testing.T) {
+	for line, want := range map[string]bool{
+		"[PATH=/srv]":    true,
+		"[host=example]": true,
+		`[ "PATH=/a b"]`: true,
+		"['HOST=x']":     true,
+		"[PHP]":          false,
+		"[ab]":           false,
+		"not a section":  false,
+		"[unterminated":  false,
+	} {
+		if got := iniSpecialSection(line); got != want {
+			t.Errorf("iniSpecialSection(%q) = %v, want %v", line, got, want)
+		}
+	}
+}
+
+// TestPoolConfigErrors fails where the opcache or temporary directory
+// cannot be made.
+func TestPoolConfigErrors(t *testing.T) {
+	engine, err := gophper.NewEngine(context.Background(), gophper.DefaultEngineConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = engine.Close(context.Background()) }()
+	file := filepath.Join(t.TempDir(), "file")
+	if err := os.WriteFile(file, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg := PHPConfig{Mounts: []Mount{{Dir: t.TempDir()}}, TempDir: t.TempDir(), ErrorLog: io.Discard}
+	cfg.OpcacheDir = file
+	if p, err := newPool(engine, cfg, nil); err == nil || !strings.Contains(err.Error(), "opcache directory") {
+		if p != nil {
+			_ = p.close()
+		}
+		t.Errorf("opcache directory in a file: %v", err)
+	}
+	if runtime.GOOS != "windows" {
+		// No user cache directory for the default opcache directory.
+		cfg.OpcacheDir = ""
+		t.Setenv("HOME", "")
+		t.Setenv("XDG_CACHE_HOME", "")
+		if p, err := newPool(engine, cfg, nil); err == nil || !strings.Contains(err.Error(), "opcache directory") {
+			if p != nil {
+				_ = p.close()
+			}
+			t.Errorf("no user cache directory: %v", err)
+		}
+	}
+	cfg.NoOpcache = true
+	t.Setenv("TMPDIR", filepath.Join(file, "tmp"))
+	t.Setenv("TMP", filepath.Join(file, "tmp"))
+	if p, err := newPool(engine, cfg, nil); err == nil {
+		_ = p.close()
+		t.Error("no temporary directory: no error")
 	}
 }

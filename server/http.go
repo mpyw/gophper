@@ -124,7 +124,11 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.serveRouter(rec, r, clean)
 		return
 	}
-	route := h.route(r.URL.Path, clean)
+	h.serveRoute(rec, r, h.route(r.URL.Path, clean, !h.cfg.NoFrontController))
+}
+
+// serveRoute answers a request as route says.
+func (h *HTTPHandler) serveRoute(rec *httpRecorder, r *http.Request, route httpRoute) {
 	switch {
 	case route.redirect != "":
 		target := route.redirect
@@ -135,7 +139,7 @@ func (h *HTTPHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	case route.static != "":
 		http.ServeFile(rec, r, route.static)
 	case route.script != "":
-		h.servePHP(rec, r, route, nil)
+		h.serveScript(rec, r, route)
 	default:
 		http.NotFound(rec, r)
 	}
@@ -154,9 +158,9 @@ func httpHidden(clean string) bool {
 
 // isScriptName reports a file name ending in a SplitPath suffix, in any case.
 func (h *HTTPHandler) isScriptName(name string) bool {
-	lower := strings.ToLower(name)
+	lower := httpLowerASCII(name)
 	for _, suffix := range h.cfg.SplitPath {
-		if strings.HasSuffix(lower, strings.ToLower(suffix)) {
+		if strings.HasSuffix(lower, httpLowerASCII(suffix)) {
 			return true
 		}
 	}
@@ -173,7 +177,8 @@ type httpRoute struct {
 	redirect string
 }
 
-func (h *HTTPHandler) route(urlPath, clean string) httpRoute {
+// route finds where a path leads. front falls back to the front controller.
+func (h *HTTPHandler) route(urlPath, clean string, front bool) httpRoute {
 	if script, pathInfo, ok := h.splitScript(clean); ok {
 		return httpRoute{script: script, pathInfo: pathInfo}
 	}
@@ -198,10 +203,23 @@ func (h *HTTPHandler) route(urlPath, clean string) httpRoute {
 			}
 		}
 	}
-	if !h.cfg.NoFrontController && h.isFile(h.cfg.FrontController) {
+	if front && h.isFile(h.cfg.FrontController) {
 		return httpRoute{script: h.cfg.FrontController}
 	}
 	return httpRoute{}
+}
+
+// httpLowerASCII lowers A to Z only. strings.ToLower changes the length of
+// some strings, such as invalid UTF-8, and splitScript indexes the original
+// with what it finds in the lowered one.
+func httpLowerASCII(s string) string {
+	b := []byte(s)
+	for i, c := range b {
+		if 'A' <= c && c <= 'Z' {
+			b[i] = c + 'a' - 'A'
+		}
+	}
+	return string(b)
 }
 
 // splitScript finds the first SplitPath suffix that ends an existing file:
@@ -211,9 +229,9 @@ func (h *HTTPHandler) splitScript(clean string) (script, pathInfo string, ok boo
 		end, found := -1, false
 		// Without case: on Windows and macOS, x.PHP is x.php, and must run
 		// rather than be sent as it is.
-		lower := strings.ToLower(clean[i:])
+		lower := httpLowerASCII(clean[i:])
 		for _, suffix := range h.cfg.SplitPath {
-			j := strings.Index(lower, strings.ToLower(suffix))
+			j := strings.Index(lower, httpLowerASCII(suffix))
 			if j < 0 {
 				continue
 			}
@@ -237,7 +255,7 @@ func (h *HTTPHandler) splitScript(clean string) (script, pathInfo string, ok boo
 func (h *HTTPHandler) serveRouter(w *httpRecorder, r *http.Request, clean string) {
 	// What php -S would run without a router, which $_SERVER describes.
 	target := httpRoute{script: clean}
-	switch route := h.route(clean+"/", clean); {
+	switch route := h.route(clean+"/", clean, !h.cfg.NoFrontController); {
 	case route.script != "" && route.script == h.cfg.FrontController:
 		// php -S passes the whole path to the index it falls back to.
 		target = httpRoute{script: route.script, pathInfo: clean}
@@ -247,6 +265,12 @@ func (h *HTTPHandler) serveRouter(w *httpRecorder, r *http.Request, clean string
 	if target.pathInfo == "/" {
 		target.pathInfo = ""
 	}
+	// Read once: the script that runs after a router reads it too.
+	body, contentLength, cleanup, ok := h.readBody(w, r)
+	if !ok {
+		return
+	}
+	defer cleanup()
 	bootstrap := h.pool.bootstrapPath("router.php")
 	pass := h.servePHP(w, r, httpRoute{script: target.script, pathInfo: target.pathInfo}, map[string]string{
 		"SCRIPT_FILENAME":                bootstrap,
@@ -256,16 +280,22 @@ func (h *HTTPHandler) serveRouter(w *httpRecorder, r *http.Request, clean string
 		"GOPHPER_ROUTER_SCRIPT_NAME":     target.script,
 		"GOPHPER_ROUTER_PHP_SELF":        target.script + target.pathInfo,
 		"GOPHPER_ROUTER_PATH_INFO":       target.pathInfo,
-	})
+	}, body, contentLength)
 	if !pass {
 		return
 	}
-	full := h.hostPath(clean)
-	if fi, err := os.Stat(full); err == nil && !fi.IsDir() {
-		http.ServeFile(w, r, full)
+	// As php -S does when the router returns false: a script runs, and
+	// only other files are sent. A path that leads nowhere is 404.
+	route := h.route(r.URL.Path, clean, false)
+	if route.script == "" {
+		h.serveRoute(w, r, route)
 		return
 	}
-	http.NotFound(w, r)
+	if _, err := body.Seek(0, io.SeekStart); err != nil {
+		http.Error(w, http.StatusText(http.StatusInternalServerError), http.StatusInternalServerError)
+		return
+	}
+	h.servePHP(w, r, route, nil, body, contentLength)
 }
 
 func (h *HTTPHandler) hostPath(urlPath string) string {
@@ -282,33 +312,46 @@ func (h *HTTPHandler) isFile(urlPath string) bool {
 	return err == nil && fi.Mode().IsRegular()
 }
 
-// servePHP runs a script and copies its CGI response to w. override
-// replaces CGI variables. It returns true, without writing a response, when
-// a router asked to pass.
-func (h *HTTPHandler) servePHP(w *httpRecorder, r *http.Request, route httpRoute, override map[string]string) (pass bool) {
+// readBody reads the request body in full, as httpBufferBody does, or
+// answers with an error and reports false.
+func (h *HTTPHandler) readBody(w *httpRecorder, r *http.Request) (io.ReadSeeker, int64, func(), bool) {
 	body := io.Reader(r.Body)
-	contentLength := r.ContentLength
 	if h.cfg.MaxBodySize > 0 {
-		if contentLength > h.cfg.MaxBodySize {
+		if r.ContentLength > h.cfg.MaxBodySize {
 			http.Error(w, http.StatusText(http.StatusRequestEntityTooLarge), http.StatusRequestEntityTooLarge)
-			return false
+			return nil, 0, nil, false
 		}
 		body = http.MaxBytesReader(w, r.Body, h.cfg.MaxBodySize)
 	}
-	if contentLength != 0 {
-		buffered, size, cleanup, err := httpBufferBody(body)
-		if err != nil {
-			status := http.StatusBadRequest
-			if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
-				status = http.StatusRequestEntityTooLarge
-			}
-			http.Error(w, http.StatusText(status), status)
-			return false
-		}
-		defer cleanup()
-		body, contentLength = buffered, size
+	if r.ContentLength == 0 {
+		return bytes.NewReader(nil), 0, func() {}, true
 	}
+	buffered, size, cleanup, err := httpBufferBody(body)
+	if err != nil {
+		status := http.StatusBadRequest
+		if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
+			status = http.StatusRequestEntityTooLarge
+		}
+		http.Error(w, http.StatusText(status), status)
+		return nil, 0, nil, false
+	}
+	return buffered, size, cleanup, true
+}
 
+// serveScript reads the body and runs a script.
+func (h *HTTPHandler) serveScript(w *httpRecorder, r *http.Request, route httpRoute) {
+	body, contentLength, cleanup, ok := h.readBody(w, r)
+	if !ok {
+		return
+	}
+	defer cleanup()
+	h.servePHP(w, r, route, nil, body, contentLength)
+}
+
+// servePHP runs a script with a body readBody read, and copies its CGI
+// response to w. override replaces CGI variables. It returns true, without
+// writing a response, when a router asked to pass.
+func (h *HTTPHandler) servePHP(w *httpRecorder, r *http.Request, route httpRoute, override map[string]string, body io.Reader, contentLength int64) (pass bool) {
 	vars := h.env(r, route, contentLength)
 	maps.Copy(vars, override)
 
@@ -345,7 +388,9 @@ func (h *HTTPHandler) servePHP(w *httpRecorder, r *http.Request, route httpRoute
 	}
 	status := http.StatusOK
 	if s := hdr.Get("Status"); s != "" {
-		code, err := strconv.Atoi(strings.Fields(s)[0])
+		// " 0" keeps a value of only Unicode spaces, which textproto keeps,
+		// from leaving no field.
+		code, err := strconv.Atoi(strings.Fields(s + " 0")[0])
 		switch {
 		case err != nil:
 		case code < 200 || code > 999:
@@ -486,7 +531,7 @@ const httpBodyMemory = 1 << 20
 // chunked body the length that php-cgi needs.
 //
 //declscope:shared // fastcgi.go buffers FCGI_STDIN with it
-func httpBufferBody(body io.Reader) (io.Reader, int64, func(), error) {
+func httpBufferBody(body io.Reader) (io.ReadSeeker, int64, func(), error) {
 	var buf bytes.Buffer
 	n, err := io.CopyN(&buf, body, httpBodyMemory+1)
 	if err == io.EOF {

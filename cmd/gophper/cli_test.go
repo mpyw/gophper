@@ -21,6 +21,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"strings"
 	"syscall"
 	"testing"
@@ -389,13 +390,84 @@ func TestCLIServeModes(t *testing.T) {
 		{"no processes", []string{"--no-processes"}, "/", `[true,false]`},
 		{"router", []string{"--router", "router.php"}, "/routed", `router`},
 		{"front controller off", []string{"--front-controller", "off"}, "/missing", "404 page not found\n"},
+		{"access log to stdout, no body limit", []string{"--access-log", "-", "--max-body", "0"}, "/", `[true,true]`},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			s := cliStart(t, dir, append([]string{"serve", "-l", "127.0.0.1:0"}, tt.args...)...)
 			if _, body := cliGet(t, http.DefaultClient, "http://"+s.addr+tt.path); body != tt.want {
 				t.Errorf("%q, want %q", body, tt.want)
 			}
+			if slices.Contains(tt.args, "-") {
+				s.stop(t)
+				if !strings.Contains(s.logs.String(), "GET / ") {
+					t.Errorf("stdout: %q", s.logs)
+				}
+			}
 		})
+	}
+}
+
+// TestCLINoCache runs without the compilation cache. PHP_BINARY's script
+// then goes in the temporary directory, which must be private.
+func TestCLINoCache(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("no PHP_BINARY on Windows")
+	}
+	dir := t.TempDir()
+	tmp := t.TempDir()
+	// Someone else's, as far as gophper can tell.
+	if err := os.Mkdir(filepath.Join(tmp, fmt.Sprintf("gophper-%d", os.Getuid())), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(filepath.Join(tmp, fmt.Sprintf("gophper-%d", os.Getuid())), 0o777); err != nil {
+		t.Fatal(err)
+	}
+	cmd := cliCommand(t, dir, "--no-cache", "php", "-r", `var_dump(PHP_BINARY);`)
+	cmd.Env = append(cmd.Env, "TMPDIR="+tmp)
+	var out, errOut bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errOut
+	if err := cmd.Run(); err != nil {
+		t.Fatalf("%v: %s", err, errOut.String())
+	}
+	// PHP still runs. PHP_BINARY is then what PHP finds itself.
+	if !strings.HasPrefix(out.String(), "string(") || !strings.Contains(errOut.String(), "not a private directory") {
+		t.Errorf("stdout %q, stderr %q", out.String(), errOut.String())
+	}
+}
+
+// TestCLIServeDefaultListen starts where no --listen says: 127.0.0.1:8080,
+// or :443 and :80 with --domain. Those may be taken, or need privileges, so
+// either outcome passes. What is checked is that it tried there.
+func TestCLIServeDefaultListen(t *testing.T) {
+	for _, tt := range []struct {
+		args []string
+		want string
+	}{
+		{nil, "8080"},
+		{[]string{"--domain", "gophper.invalid"}, ":80"},
+	} {
+		cmd := cliCommand(t, t.TempDir(), append([]string{"serve"}, tt.args...)...)
+		var errOut bytes.Buffer
+		cmd.Stderr = &errOut
+		if err := cmd.Start(); err != nil {
+			t.Fatal(err)
+		}
+		done := make(chan error, 1)
+		go func() { done <- cmd.Wait() }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			// Still serving: it listened.
+			if runtime.GOOS == "windows" {
+				_ = cmd.Process.Kill()
+			} else {
+				_ = cmd.Process.Signal(syscall.SIGTERM)
+			}
+			<-done
+		}
+		if !strings.Contains(errOut.String(), tt.want) {
+			t.Errorf("%v: %s", tt.args, errOut.String())
+		}
 	}
 }
 
@@ -449,6 +521,8 @@ func TestCLIServeErrors(t *testing.T) {
 		{"bad env", []string{"--env", "NOEQUALS"}, "key=value"},
 		{"missing php.ini", []string{"-c", "missing.ini"}, "missing.ini"},
 		{"root outside mounts", []string{"--root", "/", "--mount", dir}, "mount"},
+		{"missing certificate", []string{"--tls-cert", "missing.pem", "--tls-key", "missing.key"}, "missing.pem"},
+		{"unwritable access log", []string{"--access-log", filepath.Join(dir, "no", "such", "log")}, "log"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			_, errOut, code := cliRun(t, dir, "", append([]string{"serve", "-l", "127.0.0.1:0"}, tt.args...)...)
@@ -502,8 +576,84 @@ func TestCLIFastCGI(t *testing.T) {
 }
 
 func TestCLIFastCGIErrors(t *testing.T) {
-	_, errOut, code := cliRun(t, t.TempDir(), "", "fcgi", "--listen-mode", "9z")
-	if code != 1 || !strings.Contains(errOut, "--listen-mode") {
+	dir := t.TempDir()
+	busy := cliBusyAddr(t)
+	for _, tt := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"bad listen mode", []string{"--listen-mode", "9z"}, "--listen-mode"},
+		{"missing php.ini", []string{"-c", "missing.ini"}, "missing.ini"},
+		{"bad allowed client", []string{"--allowed-clients", "not an address"}, "not an address"},
+		{"address in use", []string{"--listen", busy}, busy},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			_, errOut, code := cliRun(t, dir, "", append([]string{"fcgi"}, tt.args...)...)
+			if code != 1 || !strings.Contains(errOut, tt.want) {
+				t.Errorf("exit %d, want 1 with %q: %s", code, tt.want, errOut)
+			}
+		})
+	}
+}
+
+// cliBusyAddr returns an address something listens on until the test ends.
+func cliBusyAddr(t *testing.T) string {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = l.Close() })
+	return l.Addr().String()
+}
+
+// TestCLIServeBusy fails to listen on an address in use.
+func TestCLIServeBusy(t *testing.T) {
+	busy := cliBusyAddr(t)
+	_, errOut, code := cliRun(t, t.TempDir(), "", "serve", "-l", busy)
+	if code != 1 || !strings.Contains(errOut, busy) {
 		t.Errorf("exit %d: %s", code, errOut)
+	}
+}
+
+// TestCLIEngineErrors fails to start the engine, with a cache directory
+// that is a file.
+func TestCLIEngineErrors(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "file")
+	cliWrite(t, file, "")
+	for _, args := range [][]string{
+		{"php", "-r", "echo 1;"},
+		{"serve", "-l", "127.0.0.1:0"},
+		{"fcgi", "--listen", "127.0.0.1:0"},
+	} {
+		_, errOut, code := cliRun(t, dir, "", append([]string{"--cache-dir", file}, args...)...)
+		if code != 1 || !strings.Contains(errOut, "cache") {
+			t.Errorf("%s: exit %d: %s", args[0], code, errOut)
+		}
+	}
+}
+
+// TestCLIExtensionInstallErrors cannot write where it was told to.
+func TestCLIExtensionInstallErrors(t *testing.T) {
+	dir := t.TempDir()
+	file := filepath.Join(dir, "file")
+	cliWrite(t, file, "")
+	// A directory where gd.so would go.
+	blocked := filepath.Join(dir, "blocked")
+	if err := os.MkdirAll(filepath.Join(blocked, "gd.so"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, tt := range []struct {
+		dir, ext string
+	}{
+		{file, "gd"},
+		{blocked, "gd"},
+	} {
+		_, errOut, code := cliRun(t, dir, "", "--extension-dir", tt.dir, "extension", "install", tt.ext)
+		if code != 1 || errOut == "" {
+			t.Errorf("%s into %s: exit %d: %s", tt.ext, tt.dir, code, errOut)
+		}
 	}
 }

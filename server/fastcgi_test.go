@@ -750,6 +750,42 @@ func TestFastCGIAbort(t *testing.T) {
 	}
 }
 
+// TestFastCGIAbortWhileReadingBody aborts a request whose body is still
+// arriving. The body is read before PHP runs, so this ends it at once.
+func TestFastCGIAbortWhileReadingBody(t *testing.T) {
+	addr, root := startFCGIScripts(t, map[string]string{"ok.php": `<?php echo "ok";`}, func(*server.FastCGIConfig) {})
+	c := dialFCGI(t, addr)
+	if err := c.conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	// A request whose body never ends: send without its last FCGI_STDIN.
+	full := fcgiRecorder{}
+	if err := (&fcgiClient{conn: &full}).send(1, false, params(root, "POST", "/ok.php", map[string]string{"CONTENT_LENGTH": "100"}), []byte("part")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.conn.Write(full.buf.Bytes()[:full.buf.Len()-8]); err != nil {
+		t.Fatal(err)
+	}
+	if err := c.write(2, 1, nil); err != nil {
+		t.Fatal(err)
+	}
+	res, err := c.read()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Status != http.StatusBadRequest || res.AppStatus != 1 {
+		t.Errorf("status %d, app status %d, body %q", res.Status, res.AppStatus, res.Body)
+	}
+}
+
+// fcgiRecorder is a net.Conn that keeps what is written to it.
+type fcgiRecorder struct {
+	net.Conn
+	buf bytes.Buffer
+}
+
+func (r *fcgiRecorder) Write(p []byte) (int, error) { return r.buf.Write(p) }
+
 // TestFastCGILimitExtensionsWalkBack sends a script path that php-cgi walks
 // back to an uploaded file, and one that turns cgi.fix_pathinfo off. Both
 // are denied: what runs is checked, not what was asked for.

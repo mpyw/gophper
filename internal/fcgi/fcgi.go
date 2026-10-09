@@ -279,12 +279,9 @@ func (c *serverConn) serve(ctx context.Context, h Handler) {
 				}
 				continue
 			}
+			// The idle deadline holds until the params are in, so that a
+			// web server that sends no more does not hold the connection.
 			cur = &activeRequest{id: rec.h.ID, keepConn: rec.content[2]&flagKeepConn != 0, done: make(chan struct{})}
-			// A request may take its time, and the reader waits for its
-			// records, or an FCGI_ABORT_REQUEST, all along.
-			if !c.readDeadline(time.Time{}) {
-				return
-			}
 			continue
 		}
 
@@ -302,11 +299,20 @@ func (c *serverConn) serve(ctx context.Context, h Handler) {
 		switch rec.h.Type {
 		case typeParams:
 			if len(rec.content) > 0 {
+				if len(cur.params)+len(rec.content) > serverMaxParams {
+					// Any client could otherwise take all the memory.
+					return
+				}
 				cur.params = append(cur.params, rec.content...)
 				continue
 			}
 			params, err := decodePairs(cur.params)
 			if err != nil {
+				return
+			}
+			// A request may take its time, and the reader waits for its
+			// records, or an FCGI_ABORT_REQUEST, all along.
+			if !c.readDeadline(time.Time{}) {
 				return
 			}
 			pr, pw := io.Pipe()
@@ -331,6 +337,9 @@ func (c *serverConn) serve(ctx context.Context, h Handler) {
 		case typeAbortRequest:
 			if cur.cancel != nil {
 				cur.cancel()
+				// No more of the body comes, so a handler still reading it
+				// stops too.
+				_ = cur.stdin.CloseWithError(errAborted) // always nil
 			}
 		case typeData:
 			// Only used by the filter role.
@@ -348,7 +357,13 @@ func (c *serverConn) handle(ctx context.Context, h Handler, a *activeRequest, re
 	if err == nil {
 		err = c.writeRecord(typeStderr, a.id, nil)
 	}
+	if err == nil && a.keepConn && !c.readDeadline(time.Now().Add(serverIdle)) {
+		err = errors.New("fcgi: setting the idle deadline failed")
+	}
 	if err == nil {
+		// The reader may be blocked already, with no deadline. The idle one
+		// starts before FCGI_END_REQUEST, so the next request, which follows
+		// it, clears it in turn.
 		err = c.endRequest(a.id, uint32(status), protocolStatusRequestComplete, a.done)
 	} else {
 		// No FCGI_END_REQUEST was sent, so no next request can race the reader.
@@ -364,8 +379,16 @@ func (c *serverConn) handle(ctx context.Context, h Handler, a *activeRequest, re
 	}
 }
 
-// serverIdle is how long a connection may wait between requests.
-const serverIdle = 2 * time.Minute
+// errAborted is what a handler reads from Stdin after FCGI_ABORT_REQUEST.
+var errAborted = errors.New("fcgi: request aborted")
+
+// serverMaxParams caps a request's params. nginx sends a few kilobytes,
+// and its headers are capped at 32 KiB by default.
+const serverMaxParams = 1 << 20
+
+// serverIdle is how long a connection may wait between requests, and for a
+// request's params. A variable, so that tests need not wait as long.
+var serverIdle = 2 * time.Minute
 
 // readDeadline sets the read deadline, unless the connection is stopping.
 // It reports false if setting it failed, and the connection is closed.

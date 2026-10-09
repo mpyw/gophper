@@ -250,7 +250,7 @@ func serveFlags() []cli.Flag {
 		},
 		&cli.StringFlag{
 			Name:    "router",
-			Usage:   "script that runs for every request, as with php -S; returning false sends the file as is",
+			Usage:   "script that runs for every request, as with php -S; returning false runs the script or sends the file the path names",
 			Sources: env("ROUTER"),
 		},
 		&cli.StringSliceFlag{

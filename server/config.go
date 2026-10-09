@@ -57,7 +57,8 @@ type HTTPConfig struct {
 	Root string
 	// Router is a script that runs for every request, as with php -S. It
 	// runs from the directory the server started in, and $_SERVER describes
-	// the script the request resolves to. Relative paths are inside Root.
+	// the script the request resolves to. If it returns false, that script
+	// runs, or the file is sent. Relative paths are inside Root.
 	Router string
 	// Index lists the files a directory runs. Default: index.php.
 	Index []string

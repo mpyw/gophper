@@ -49,8 +49,9 @@ const signalIgnoredByDefault = 1<<17 | 1<<18 | 1<<23 | 1<<28 // CHLD, CONT, URG,
 
 const signalAlarm = 14
 
-// signalGrace is how long a guest gets to act on a fatal signal.
-const signalGrace = 5 * time.Second
+// signalGrace is how long a guest gets to act on a fatal signal. A
+// variable, so that tests need not wait as long.
+var signalGrace = 5 * time.Second
 
 // NewSignals returns the state for one instance.
 func NewSignals(run Run) *Signals {

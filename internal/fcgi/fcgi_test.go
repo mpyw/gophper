@@ -535,3 +535,50 @@ func TestServeStopsWithIdleConnection(t *testing.T) {
 		t.Fatal("Serve did not return while a connection was idle")
 	}
 }
+
+// TestServeIdle closes a connection that waits too long: after a kept-alive
+// request, and for params after FCGI_BEGIN_REQUEST. A request that runs
+// longer keeps it.
+func TestServeIdle(t *testing.T) {
+	// Restored once the server is gone: cleanups run last first.
+	old := serverIdle
+	t.Cleanup(func() { serverIdle = old })
+	serverIdle = 200 * time.Millisecond
+	addr := fcgiTestServer(t, func(ctx context.Context, r *Request) int {
+		if r.Params["SLOW"] != "" {
+			time.Sleep(3 * serverIdle)
+		}
+		return fcgiEcho(ctx, r)
+	})
+	request := func(c *serverConn, params map[string]string) {
+		t.Helper()
+		c.fcgiBegin(t, 1, roleResponder, true)
+		c.fcgiSend(t, typeParams, 1, encodePairs(params))
+		c.fcgiSend(t, typeParams, 1, nil)
+		c.fcgiSend(t, typeStdin, 1, nil)
+		if res := c.fcgiReadResult(t, 1); res.protocolStatus != protocolStatusRequestComplete {
+			t.Fatalf("protocol status %d", res.protocolStatus)
+		}
+	}
+	c := fcgiRawConn(t, addr)
+	request(c, map[string]string{"SLOW": "1"})
+	request(c, map[string]string{"NAME": "after a slow one"})
+	c.fcgiExpectClosed(t)
+
+	c = fcgiRawConn(t, addr)
+	c.fcgiBegin(t, 1, roleResponder, true)
+	c.fcgiExpectClosed(t)
+}
+
+// TestServeParamsLimit drops a connection whose params grow past the cap.
+func TestServeParamsLimit(t *testing.T) {
+	c := fcgiRawConn(t, fcgiTestServer(t, fcgiEcho))
+	c.fcgiBegin(t, 1, roleResponder, true)
+	chunk := make([]byte, 65535)
+	for range serverMaxParams/len(chunk) + 1 {
+		if c.writeRecord(typeParams, 1, chunk) != nil || c.flush() != nil {
+			break // closed already
+		}
+	}
+	c.fcgiExpectClosed(t)
+}

@@ -5,8 +5,10 @@ import (
 	"encoding/binary"
 	"io"
 	"net"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mpyw/gophper/internal/wasi"
 )
@@ -122,6 +124,12 @@ func TestDNSBuildQuery(t *testing.T) {
 }
 
 func TestDNSServers(t *testing.T) {
+	defer func(old func() []string) { dnsHostServers = old }(dnsHostServers)
+	dnsHostServers = func() []string { return nil }
+	if got := dnsServers(); !slices.Equal(got, []string{"127.0.0.1:53", "[::1]:53"}) {
+		t.Errorf("without servers: %v", got)
+	}
+	dnsHostServers = dnsSystemServers
 	servers := dnsServers()
 	if len(servers) == 0 {
 		t.Fatal("no servers")
@@ -241,5 +249,110 @@ func TestDNSExchange(t *testing.T) {
 	cancel()
 	if _, err := dnsExchange(canceled, server, q, id); err == nil {
 		t.Error("exchange with a canceled context succeeded")
+	}
+
+	// Canceling cuts a wait for either answer short.
+	silent := func([]byte) [][]byte { return nil }
+	slowTCP := func([]byte) []byte { time.Sleep(time.Second); return nil }
+	for name, server := range map[string]string{
+		"UDP": dnsTestServer(t, silent, noTCP),
+		"TCP": dnsTestServer(t, truncated, slowTCP),
+	} {
+		ctx, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+		start := time.Now()
+		_, err := dnsExchange(ctx, server, q, id)
+		cancel()
+		if err == nil || time.Since(start) > dnsTimeout/2 {
+			t.Errorf("canceled while waiting over %s: %v after %s", name, err, time.Since(start))
+		}
+	}
+
+	// A truncated answer from a server with no TCP, or with an answer
+	// shorter than its length.
+	for name, tcp := range map[string]func(net.Conn){
+		"no TCP":       nil,
+		"short answer": func(c net.Conn) { _, _ = c.Write([]byte{0, 100, 1, 2}) },
+	} {
+		server := dnsTestUDPOnly(t, truncated)
+		if tcp != nil {
+			l, err := net.Listen("tcp", server)
+			if err != nil {
+				t.Skip(err)
+			}
+			defer func() { _ = l.Close() }()
+			go func() {
+				c, err := l.Accept()
+				if err != nil {
+					return
+				}
+				tcp(c)
+				_ = c.Close()
+			}()
+		}
+		if a, err := dnsExchange(ctx, server, q, id); err == nil {
+			t.Errorf("%s: % x", name, a)
+		}
+	}
+}
+
+// dnsTestUDPOnly listens on UDP alone. udp answers each query.
+func dnsTestUDPOnly(t *testing.T, udp func(q []byte) [][]byte) string {
+	t.Helper()
+	pc, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = pc.Close() })
+	go func() {
+		buf := make([]byte, 512)
+		for {
+			n, from, err := pc.ReadFrom(buf)
+			if err != nil {
+				return
+			}
+			for _, p := range udp(append([]byte(nil), buf[:n]...)) {
+				_, _ = pc.WriteTo(p, from) // a lost answer fails the exchange
+			}
+		}
+	}()
+	return pc.LocalAddr().String()
+}
+
+// TestDNSQueryAnswers maps the answer's rcode and count to h_errno, and
+// tries the next server when one fails.
+func TestDNSQueryAnswers(t *testing.T) {
+	defer func(old func() []string) { dnsHostServers = old }(dnsHostServers)
+	m := newGuest(t)
+	x := newDNSExports(newGuestRun(t))
+	answer := func(rcode byte, count uint16) func(q []byte) [][]byte {
+		return func(q []byte) [][]byte {
+			a := dnsTestAnswer(q, binary.BigEndian.Uint16(q), 0)
+			a[3] = rcode
+			binary.BigEndian.PutUint16(a[6:], count)
+			return [][]byte{a}
+		}
+	}
+	noTCP := func([]byte) []byte { return nil }
+	// 256.0.0.1 is no address, so dialing it fails at once.
+	for _, c := range []struct {
+		name    string
+		servers []string
+		want    int32
+	}{
+		{"answer", []string{dnsTestServer(t, answer(0, 1), noTCP)}, 0},
+		{"no data", []string{dnsTestServer(t, answer(0, 0), noTCP)}, -dnsNoData},
+		{"NXDOMAIN", []string{dnsTestServer(t, answer(3, 0), noTCP)}, -dnsHostNotFound},
+		{"SERVFAIL", []string{dnsTestServer(t, answer(2, 0), noTCP)}, -dnsTryAgain},
+		{"REFUSED", []string{dnsTestServer(t, answer(5, 0), noTCP)}, -dnsNoRecovery},
+		{"no server answers", []string{"256.0.0.1:53"}, -dnsTryAgain},
+		{"the next server", []string{"256.0.0.1:53", dnsTestServer(t, answer(0, 1), noTCP)}, 0},
+	} {
+		dnsHostServers = func() []string { return c.servers }
+		p, n := guestString(t, m, dnsTestNameOff, "example.com")
+		got := x.query(context.Background(), m, p, n, 1, 1, dnsTestOutOff, 512)
+		// 0 stands for an answer, of more than a header.
+		if (c.want == 0 && got <= 12) || (c.want != 0 && got != c.want) {
+			t.Errorf("%s: %d, want %d", c.name, got, c.want)
+		}
 	}
 }
