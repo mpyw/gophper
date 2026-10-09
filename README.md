@@ -6,6 +6,9 @@
 
 Run PHP from Go with no cgo.
 
+[![Build](https://github.com/mpyw/gophper/actions/workflows/test.yml/badge.svg)](https://github.com/mpyw/gophper/actions/workflows/test.yml)
+[![Coverage](https://codecov.io/gh/mpyw/gophper/graph/badge.svg)](https://codecov.io/gh/mpyw/gophper)
+
 </div>
 
 gophper runs php-src, compiled to WebAssembly, on [wazero](https://github.com/tetratelabs/wazero).
@@ -14,18 +17,88 @@ It is the real Zend Engine, so the language behaves exactly like PHP.
 > [!WARNING]
 > This is an experiment. The API will change.
 
-## Install
+The PHP binaries come from [gophper-wasm](https://github.com/mpyw/gophper-wasm), a Go module that embeds them.
+Its README lists the versions of PHP and of every library inside.
+Only Go is needed, with no C compiler.
 
-Only Go is needed.
+## Usage: As a Library
+
+```sh
+go get github.com/mpyw/gophper
+```
+
+```go
+engine, err := gophper.NewEngine(ctx, gophper.DefaultEngineConfig())
+if err != nil {
+	return err
+}
+defer engine.Close(ctx)
+
+code, err := engine.RunCLI(ctx, gophper.Options{
+	Args:   []string{"-r", "echo 1 + 1;"},
+	Stdout: os.Stdout,
+	Stderr: os.Stderr,
+})
+```
+
+| Package | Contents |
+| --- | --- |
+| `github.com/mpyw/gophper` | `Engine`: runs the CLI or CGI SAPI once per call |
+| `github.com/mpyw/gophper/server` | `HTTPHandler`, an `http.Handler`, and `FastCGIServer`. Both take a `PHPConfig`. |
+
+To serve a PHP app from your own `http.Server`:
+
+```go
+h, err := server.NewHTTPHandler(engine, server.HTTPConfig{Root: "public"})
+if err != nil {
+	return err
+}
+defer h.Close()
+return http.ListenAndServe("127.0.0.1:8080", h)
+```
+
+`HTTPConfig` and `FastCGIConfig` have the same settings as the [`serve`](#http) and [`fcgi`](#fastcgi) options.
+Extensions load from `EngineConfig.ExtensionDir`. See [Extensions](#extensions).
+
+PHP can call functions written in Go:
+
+```go
+code, err := engine.RunCLI(ctx, gophper.Options{
+	Args:   []string{"-r", `echo go_add(20, 22), "\n";`},
+	Stdout: os.Stdout,
+	Functions: map[string]gophper.Function{
+		"go_add": func(ctx context.Context, args []any) (any, error) {
+			return args[0].(int64) + args[1].(int64), nil
+		},
+	},
+})
+```
+
+| PHP | Go |
+| --- | --- |
+| `null`, `bool`, `int`, `float`, `string` | `nil`, `bool`, `int64`, `float64`, `string` |
+| An array with the keys 0 to n-1 | `[]any` |
+| Any other array, or an object | `map[string]any` |
+| An exception (`RuntimeException`) | A returned `error` |
+
+PHP gets nothing of the host unless `Options` says so:
+
+| Field | Meaning | Zero value |
+| --- | --- | --- |
+| `FS` | The directories PHP sees | No file system |
+| `HostPath` | Maps a path inside PHP to its host file, for permissions, owners, locks and child processes | No path has a host file |
+| `Processes` | PHP may start host programs | `proc_open` and the rest fail |
+| `Signals` | Signals for PHP, as from `signal.Notify`. Handled ones run the `pcntl` handler. The rest end the run with exit code 128 plus the signal number. | No signals |
+
+`DefaultEngineConfig` keeps a per-user cache directory: wazero's compiled code, and the PHP binaries decompressed.
+With the cache, `gophper php -r 'echo 1;'` takes about 0.18 seconds.
+Most of it is wazero validating the 16 MB binary, which it does even with the cache.
+
+## Usage: As a Tool
 
 ```sh
 CGO_ENABLED=0 go install github.com/mpyw/gophper/cmd/gophper@latest
 ```
-
-The PHP binaries come from [gophper-wasm](https://github.com/mpyw/gophper-wasm), a Go module that embeds them.
-Its README lists the versions of PHP and of every library inside.
-
-## Usage
 
 | Command | What it does |
 | --- | --- |
@@ -229,61 +302,6 @@ These come with gophper:
 | `sodium` | libsodium |
 | `zip` | `ZipArchive`, with AES encryption |
 | `dl_test` | php-src's extension for testing `dl()` |
-
-### From Go
-
-```go
-engine, err := gophper.NewEngine(ctx, gophper.DefaultEngineConfig())
-if err != nil {
-	return err
-}
-defer engine.Close(ctx)
-
-code, err := engine.RunCLI(ctx, gophper.Options{
-	Args:   []string{"-r", "echo 1 + 1;"},
-	Stdout: os.Stdout,
-	Stderr: os.Stderr,
-})
-```
-
-| Package | Contents |
-| --- | --- |
-| `github.com/mpyw/gophper` | `Engine`: runs the CLI or CGI SAPI once per call |
-| `github.com/mpyw/gophper/server` | `HTTPHandler`, an `http.Handler`, and `FastCGIServer`. Both take a `PHPConfig`. |
-
-PHP can call functions written in Go:
-
-```go
-code, err := engine.RunCLI(ctx, gophper.Options{
-	Args:   []string{"-r", `echo go_add(20, 22), "\n";`},
-	Stdout: os.Stdout,
-	Functions: map[string]gophper.Function{
-		"go_add": func(ctx context.Context, args []any) (any, error) {
-			return args[0].(int64) + args[1].(int64), nil
-		},
-	},
-})
-```
-
-| PHP | Go |
-| --- | --- |
-| `null`, `bool`, `int`, `float`, `string` | `nil`, `bool`, `int64`, `float64`, `string` |
-| An array with the keys 0 to n-1 | `[]any` |
-| Any other array, or an object | `map[string]any` |
-| An exception (`RuntimeException`) | A returned `error` |
-
-PHP gets nothing of the host unless `Options` says so:
-
-| Field | Meaning | Zero value |
-| --- | --- | --- |
-| `FS` | The directories PHP sees | No file system |
-| `HostPath` | Maps a path inside PHP to its host file, for permissions, owners, locks and child processes | No path has a host file |
-| `Processes` | PHP may start host programs | `proc_open` and the rest fail |
-| `Signals` | Signals for PHP, as from `signal.Notify`. Handled ones run the `pcntl` handler. The rest end the run with exit code 128 plus the signal number. | No signals |
-
-`DefaultEngineConfig` keeps a per-user cache directory: wazero's compiled code, and the PHP binaries decompressed.
-With the cache, `gophper php -r 'echo 1;'` takes about 0.18 seconds.
-Most of it is wazero validating the 16 MB binary, which it does even with the cache.
 
 ## What works
 

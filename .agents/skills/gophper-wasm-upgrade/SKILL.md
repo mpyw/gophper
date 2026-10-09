@@ -22,7 +22,7 @@ gophper-wasm's branches hold no binaries. Only its release tags carry them.
 ## After a release
 
 ```sh
-GOPRIVATE='github.com/mpyw/*' go get github.com/mpyw/gophper-wasm@vX.Y.Z
+go get github.com/mpyw/gophper-wasm@vX.Y.Z
 go mod tidy
 go generate ./cmd/gophper   # the license list names the version
 ```
