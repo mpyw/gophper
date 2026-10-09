@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/mpyw/gophper"
+	"github.com/mpyw/gophper/internal/hostpath"
 )
 
 // HTTPHandler serves a PHP application over HTTP in one process, with no
@@ -232,9 +233,9 @@ func (h *HTTPHandler) serveRouter(w *httpRecorder, r *http.Request, clean string
 	bootstrap := h.pool.bootstrapPath("router.php")
 	pass := h.servePHP(w, r, httpRoute{script: target.script, pathInfo: target.pathInfo}, map[string]string{
 		"SCRIPT_FILENAME":                bootstrap,
-		"GOPHPER_ROUTER_ROUTER":          h.cfg.Router,
-		"GOPHPER_ROUTER_CWD":             h.cwd,
-		"GOPHPER_ROUTER_SCRIPT_FILENAME": h.hostPath(target.script),
+		"GOPHPER_ROUTER_ROUTER":          hostpath.Guest(h.cfg.Router),
+		"GOPHPER_ROUTER_CWD":             hostpath.Guest(h.cwd),
+		"GOPHPER_ROUTER_SCRIPT_FILENAME": h.guestPath(target.script),
 		"GOPHPER_ROUTER_SCRIPT_NAME":     target.script,
 		"GOPHPER_ROUTER_PHP_SELF":        target.script + target.pathInfo,
 		"GOPHPER_ROUTER_PATH_INFO":       target.pathInfo,
@@ -252,6 +253,11 @@ func (h *HTTPHandler) serveRouter(w *httpRecorder, r *http.Request, clean string
 
 func (h *HTTPHandler) hostPath(urlPath string) string {
 	return filepath.Join(h.cfg.Root, filepath.FromSlash(urlPath))
+}
+
+// guestPath is hostPath as PHP sees it.
+func (h *HTTPHandler) guestPath(urlPath string) string {
+	return hostpath.Guest(h.hostPath(urlPath))
 }
 
 func (h *HTTPHandler) isFile(urlPath string) bool {
@@ -386,10 +392,10 @@ func (h *HTTPHandler) env(r *http.Request, route httpRoute, contentLength int64)
 		"REQUEST_SCHEME":    scheme,
 		"REQUEST_URI":       r.RequestURI,
 		"QUERY_STRING":      r.URL.RawQuery,
-		"DOCUMENT_ROOT":     h.cfg.Root,
+		"DOCUMENT_ROOT":     hostpath.Guest(h.cfg.Root),
 		"DOCUMENT_URI":      route.script + route.pathInfo,
 		"SCRIPT_NAME":       route.script,
-		"SCRIPT_FILENAME":   h.hostPath(route.script),
+		"SCRIPT_FILENAME":   h.guestPath(route.script),
 		"CONTENT_LENGTH":    strconv.FormatInt(contentLength, 10),
 		"CONTENT_TYPE":      r.Header.Get("Content-Type"),
 		"HTTP_HOST":         r.Host,
@@ -397,7 +403,7 @@ func (h *HTTPHandler) env(r *http.Request, route httpRoute, contentLength int64)
 	// Set only when there is one, as Apache and PHP's built-in server do.
 	if route.pathInfo != "" {
 		vars["PATH_INFO"] = route.pathInfo
-		vars["PATH_TRANSLATED"] = h.hostPath(route.pathInfo)
+		vars["PATH_TRANSLATED"] = h.guestPath(route.pathInfo)
 	}
 	if r.TLS != nil {
 		vars["HTTPS"] = "on"

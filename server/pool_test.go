@@ -14,7 +14,8 @@ import (
 )
 
 // poolForTest returns a pool of workers for a directory holding index.php,
-// which prints "ok", and the CGI variables that run it.
+// which prints "ok", and the CGI variables that run it. A pool runs paths
+// as PHP sees them.
 func poolForTest(t *testing.T) (*pool, map[string]string) {
 	t.Helper()
 	engine, err := gophper.NewEngine(context.Background(), gophper.DefaultEngineConfig())
@@ -39,7 +40,7 @@ func poolForTest(t *testing.T) (*pool, map[string]string) {
 		_ = p.close()
 		_ = engine.Close(context.Background())
 	})
-	return p, map[string]string{"SCRIPT_FILENAME": filepath.Join(root, "index.php"), "REQUEST_METHOD": "GET"}
+	return p, map[string]string{"SCRIPT_FILENAME": gophper.HostToGuest(filepath.Join(root, "index.php")), "REQUEST_METHOD": "GET"}
 }
 
 // poolRunForTest runs index.php and checks its output.

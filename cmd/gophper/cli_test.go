@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mpyw/gophper"
 	"github.com/mpyw/gophper/internal/fcgi"
 )
 
@@ -223,7 +224,7 @@ func TestCLIHelp(t *testing.T) {
 
 func TestCLIPHP(t *testing.T) {
 	dir := t.TempDir()
-	cliWrite(t, filepath.Join(dir, "args.php"), `<?php echo implode(",", array_slice($argv, 1)), "|", stream_get_contents(STDIN), "|", getcwd() === getenv("PWD") ? "cwd" : getcwd();`)
+	cliWrite(t, filepath.Join(dir, "args.php"), `<?php echo implode(",", array_slice($argv, 1)), "|", stream_get_contents(STDIN), "|", getcwd();`)
 	for _, tt := range []struct {
 		name  string
 		args  []string
@@ -233,7 +234,8 @@ func TestCLIPHP(t *testing.T) {
 	}{
 		{"code", []string{"-r", `echo 1 + 1;`}, "", "2", 0},
 		{"exit code", []string{"-r", `exit(3);`}, "", "", 3},
-		{"file, arguments and stdin", []string{"args.php", "a", "b"}, "in", "a,b|in|cwd", 0},
+		// PHP sees the current directory, in its own form on Windows.
+		{"file, arguments and stdin", []string{"args.php", "a", "b"}, "in", "a,b|in|" + gophper.HostToGuest(dir), 0},
 		{"define", []string{"-d", "memory_limit=77M", "-r", `echo ini_get("memory_limit");`}, "", "77M", 0},
 		{"fatal error", []string{"-r", `undefined_fn();`}, "", "", 255},
 	} {
@@ -371,7 +373,9 @@ echo json_encode([
 // TestCLIServeModes covers the options that change how PHP runs.
 func TestCLIServeModes(t *testing.T) {
 	dir := t.TempDir()
-	cliWrite(t, filepath.Join(dir, "index.php"), `<?php echo json_encode([(bool) ini_get("opcache.enable"), function_exists("proc_open") && @proc_open("true", [], $p) !== false]);`)
+	// Whether PHP may start programs, without needing one: a missing one is
+	// not found only when the host was asked.
+	cliWrite(t, filepath.Join(dir, "index.php"), `<?php echo json_encode([(bool) ini_get("opcache.enable"), function_exists("proc_open") && @proc_open(["gophper-no-such-program"], [], $p) === false && str_ends_with(error_get_last()["message"], "No such file or directory")]);`)
 	cliWrite(t, filepath.Join(dir, "router.php"), `<?php if ($_SERVER["REQUEST_URI"] === "/routed") { echo "router"; return; } return false;`)
 	for _, tt := range []struct {
 		name string

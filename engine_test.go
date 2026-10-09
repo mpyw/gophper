@@ -23,11 +23,11 @@ func runCLI(t *testing.T, stdin string, args ...string) (string, int) {
 	var out bytes.Buffer
 	code, err := newTestEngine(t).RunCLI(context.Background(), gophper.Options{
 		Args:   args,
-		Env:    []string{"TMPDIR=" + t.TempDir()},
+		Env:    []string{"TMPDIR=" + gophper.HostToGuest(t.TempDir())},
 		Stdin:  strings.NewReader(stdin),
 		Stdout: &out,
 		Stderr: &out,
-		FS:     wazero.NewFSConfig().WithDirMount("/", "/"),
+		FS:     gophper.HostFS(),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -40,7 +40,7 @@ func TestSmoke(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	out, code := runCLI(t, "piped line\n", script)
+	out, code := runCLI(t, "piped line\n", gophper.HostToGuest(script))
 	if code != 0 {
 		t.Fatalf("exit code %d\n%s", code, out)
 	}
@@ -79,15 +79,15 @@ func TestDir(t *testing.T) {
 	var out bytes.Buffer
 	code, err := newTestEngine(t).RunCLI(context.Background(), gophper.Options{
 		Args:   []string{"-r", `echo getcwd(), "|", file_exists("smoke.php") ? "found" : "missing", "|", getenv("GOPHPER_CWD") === false ? "hidden" : "visible";`},
-		Dir:    dir,
+		Dir:    gophper.HostToGuest(dir),
 		Stdout: &out,
 		Stderr: &out,
-		FS:     wazero.NewFSConfig().WithDirMount("/", "/"),
+		FS:     gophper.HostFS(),
 	})
 	if err != nil || code != 0 {
 		t.Fatal(code, err, out.String())
 	}
-	if want := dir + "|found|hidden"; out.String() != want {
+	if want := gophper.HostToGuest(dir) + "|found|hidden"; out.String() != want {
 		t.Errorf("got %q, want %q", out.String(), want)
 	}
 }
@@ -200,8 +200,9 @@ func TestEngineCacheDir(t *testing.T) {
 	if def := gophper.DefaultEngineConfig().CacheDir; def != "" {
 		compiled, _ := filepath.Glob(filepath.Join(def, "wazero-*"))
 		for _, c := range compiled {
+			// Windows may refuse a symbolic link, which only costs time.
 			if err := os.Symlink(c, filepath.Join(dir, filepath.Base(c))); err != nil {
-				t.Fatal(err)
+				break
 			}
 		}
 	}
@@ -288,7 +289,7 @@ func TestEnginePHPBinary(t *testing.T) {
 	cfg := gophper.DefaultEngineConfig()
 	cfg.PHPBinary = bin
 	got := runEngineCLI(t, newEngineWith(t, cfg), `echo PHP_BINARY, "|", is_file(PHP_BINARY) ? "visible" : "hidden";`)
-	if want := filepath.ToSlash(bin) + "|visible"; got != want {
+	if want := gophper.HostToGuest(bin) + "|visible"; got != want {
 		t.Errorf("got %q, want %q", got, want)
 	}
 	if got := runEngineCLI(t, newTestEngine(t), `var_dump(PHP_BINARY);`); got != "string(0) \"\"\n" {
@@ -308,12 +309,12 @@ func TestEngineRunCGI(t *testing.T) {
 	code, err := newTestEngine(t).RunCGI(context.Background(), gophper.Options{
 		Env: []string{
 			"REDIRECT_STATUS=200", "GATEWAY_INTERFACE=CGI/1.1", "REQUEST_METHOD=POST", "QUERY_STRING=q=1",
-			"SCRIPT_FILENAME=" + script, "CONTENT_LENGTH=4", "CONTENT_TYPE=text/plain",
+			"SCRIPT_FILENAME=" + gophper.HostToGuest(script), "CONTENT_LENGTH=4", "CONTENT_TYPE=text/plain",
 		},
 		Stdin:  strings.NewReader("body"),
 		Stdout: &out,
 		Stderr: &stderr,
-		FS:     wazero.NewFSConfig().WithReadOnlyDirMount(dir, dir).WithDirMount(t.TempDir(), "/tmp"),
+		FS:     wazero.NewFSConfig().WithReadOnlyDirMount(dir, gophper.HostToGuest(dir)).WithDirMount(t.TempDir(), "/tmp"),
 	})
 	if err != nil || code != 0 {
 		t.Fatalf("exit %d, err %v\n%s", code, err, stderr.String())

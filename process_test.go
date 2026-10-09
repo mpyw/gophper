@@ -13,8 +13,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/tetratelabs/wazero"
-
 	"github.com/mpyw/gophper"
 )
 
@@ -101,7 +99,7 @@ func TestProcess(t *testing.T) {
 }
 
 // runProcessPHP runs code as runPHP does, with stdin, and with the host
-// paths under readOnly read-only to host functions. It returns the error of
+// paths under the host path readOnly read-only to host functions. It returns the error of
 // RunCLI.
 func runProcessPHP(ctx context.Context, t *testing.T, code string, stdin io.Reader, readOnly string) (string, int, error) {
 	t.Helper()
@@ -111,9 +109,10 @@ func runProcessPHP(ctx context.Context, t *testing.T, code string, stdin io.Read
 		Stdin:  stdin,
 		Stdout: &out,
 		Stderr: &out,
-		FS:     wazero.NewFSConfig().WithDirMount("/", "/"),
+		FS:     gophper.HostFS(),
 		HostPath: func(path string) (string, bool, bool) {
-			return path, readOnly == "" || !strings.HasPrefix(path, readOnly), true
+			host, writable, ok := gophper.HostPaths(path)
+			return host, writable && (readOnly == "" || !strings.HasPrefix(host, readOnly)), ok
 		},
 		Processes: true,
 	})
@@ -147,7 +146,8 @@ func TestProcessFiles(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	php := func(s string) string { return fmt.Sprintf("%q", s) }
+	// A host path, quoted as PHP sees it.
+	php := func(s string) string { return fmt.Sprintf("%q", gophper.HostToGuest(s)) }
 	for _, tt := range []struct {
 		name  string
 		code  string
@@ -210,7 +210,7 @@ func TestProcessWaitCanceled(t *testing.T) {
 		$p = proc_open(['sleep', '3'], [], $pipes);
 		echo "waiting\n";
 		touch(%q);
-		echo 'closed ', proc_close($p), "\n";`, ready), nil, "")
+		echo 'closed ', proc_close($p), "\n";`, gophper.HostToGuest(ready)), nil, "")
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("err %v, want the cancel", err)
 	}

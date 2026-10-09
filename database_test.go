@@ -5,11 +5,10 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/tetratelabs/wazero"
 
 	"github.com/mpyw/gophper"
 )
@@ -57,7 +56,9 @@ func TestDatabasePDO(t *testing.T) {
 func TestDatabaseSQLiteLocks(t *testing.T) {
 	for _, vfs := range []string{"", "unix"} {
 		t.Run("vfs="+vfs, func(t *testing.T) {
-			dir := t.TempDir()
+			hostDir := t.TempDir()
+			// Paths as PHP sees them.
+			dir := gophper.HostToGuest(hostDir)
 			db, held, release := dir+"/t.db", dir+"/held", dir+"/release"
 			dsn := "sqlite:" + db
 			if vfs != "" {
@@ -82,8 +83,8 @@ func TestDatabaseSQLiteLocks(t *testing.T) {
 						for ($i = 0; $i < 200 && !file_exists('%s'); $i++) usleep(50000);
 					`, held, release)},
 					Stdout: &out, Stderr: &out,
-					FS:       wazero.NewFSConfig().WithDirMount("/", "/"),
-					HostPath: func(path string) (string, bool, bool) { return path, true, true },
+					FS:       gophper.HostFS(),
+					HostPath: gophper.HostPaths,
 				})
 				if err != nil {
 					_, _ = fmt.Fprint(&out, err)
@@ -91,7 +92,7 @@ func TestDatabaseSQLiteLocks(t *testing.T) {
 				first <- out.String()
 			}()
 			for deadline := time.Now().Add(30 * time.Second); ; {
-				if _, err := os.Stat(held); err == nil {
+				if _, err := os.Stat(filepath.Join(hostDir, "held")); err == nil {
 					break
 				}
 				if time.Now().After(deadline) {
@@ -108,7 +109,7 @@ func TestDatabaseSQLiteLocks(t *testing.T) {
 				}
 			}
 			second, _ := runPHP(t, lock)
-			if err := os.WriteFile(release, nil, 0o644); err != nil {
+			if err := os.WriteFile(filepath.Join(hostDir, "release"), nil, 0o644); err != nil {
 				t.Fatal(err)
 			}
 			<-first

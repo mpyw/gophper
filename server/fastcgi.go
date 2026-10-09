@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/netip"
 	"path/filepath"
@@ -16,6 +17,7 @@ import (
 
 	"github.com/mpyw/gophper"
 	"github.com/mpyw/gophper/internal/fcgi"
+	"github.com/mpyw/gophper/internal/hostpath"
 )
 
 // FastCGIServer serves PHP over FastCGI, like php-fpm.
@@ -111,7 +113,7 @@ func (s *FastCGIServer) handle(ctx context.Context, r *fcgi.Request) int {
 		return 1
 	}
 
-	code, err := s.pool.run(ctx, r.Params, r.Stdin, out, r.Stderr)
+	code, err := s.pool.run(ctx, fastCGIGuestParams(r.Params), r.Stdin, out, r.Stderr)
 	if err != nil {
 		writePoolLog(r.Stderr, "gophper: %s: %v\n", script, err)
 		if out.n == 0 {
@@ -184,4 +186,16 @@ func (l *fastcgiListener) Accept() (net.Conn, error) {
 		writePoolLog(l.errorLog, "gophper: connection from %s is not allowed\n", addr)
 		_ = conn.Close() // refused before any byte was read
 	}
+}
+
+// fastCGIGuestParams returns params with the host paths a web server sends
+// turned into the paths PHP sees. They are the same, except on Windows.
+func fastCGIGuestParams(params map[string]string) map[string]string {
+	out := maps.Clone(params)
+	for _, k := range []string{"SCRIPT_FILENAME", "PATH_TRANSLATED", "DOCUMENT_ROOT"} {
+		if v, ok := out[k]; ok && filepath.IsAbs(v) {
+			out[k] = hostpath.Guest(v)
+		}
+	}
+	return out
 }

@@ -139,14 +139,18 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 		return wasi.ENOENT
 	}
 
-	name, err := processResolve(path, search != 0, cwd, env)
-	if err != nil {
-		return errnoFrom(err)
+	cmd, ok := processShell(path, argv)
+	if !ok {
+		name, err := processResolve(path, search != 0, cwd, env)
+		if err != nil {
+			return errnoFrom(err)
+		}
+		cmd = &exec.Cmd{Path: name, Args: argv}
+		if len(cmd.Args) == 0 {
+			cmd.Args = []string{path}
+		}
 	}
-	cmd := &exec.Cmd{Path: name, Args: argv, Env: env, Dir: cwd}
-	if len(cmd.Args) == 0 {
-		cmd.Args = []string{path}
-	}
+	cmd.Env, cmd.Dir = env, cwd
 
 	var release []func()
 	defer func() {

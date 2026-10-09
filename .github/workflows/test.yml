@@ -63,6 +63,13 @@ jobs:
         if: matrix.os == 'ubuntu-24.04'
         run: golangci-lint run ./...
 
+      # Files for Windows only, such as its file locks and DNS servers.
+      - name: Lint for Windows
+        if: matrix.os == 'ubuntu-24.04'
+        run: golangci-lint run ./...
+        env:
+          GOOS: windows
+
       - name: declscope
         if: matrix.os == 'ubuntu-24.04'
         run: declscope ./... && declscope shrink ./...

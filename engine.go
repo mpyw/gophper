@@ -20,6 +20,7 @@ import (
 	"github.com/mpyw/gophper/internal/dylink"
 	"github.com/mpyw/gophper/internal/hostfn"
 	"github.com/mpyw/gophper/internal/hostnet"
+	"github.com/mpyw/gophper/internal/hostpath"
 	"github.com/mpyw/gophper/internal/hostproc"
 	"github.com/mpyw/gophper/internal/hostsig"
 	"github.com/mpyw/gophper/internal/hostsys"
@@ -264,8 +265,8 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 	if e.phpBinary != "" {
 		// PHP_BINARY is checked from inside, so its directory must be visible.
 		dir := filepath.Dir(e.phpBinary)
-		fs = fs.WithReadOnlyDirMount(dir, filepath.ToSlash(dir))
-		argv0 = e.phpBinary
+		fs = fs.WithReadOnlyDirMount(dir, hostpath.Guest(dir))
+		argv0 = hostpath.Guest(e.phpBinary)
 	}
 
 	mc := wazero.NewModuleConfig().

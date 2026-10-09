@@ -60,6 +60,7 @@ linters:
             - github.com/mpyw/gophper/internal/wasi$
             - github.com/mpyw/gophper/internal/hostsig$
             - github.com/mpyw/gophper/internal/hostvm$
+            - github.com/mpyw/gophper/internal/hostpath$
 
         # Package server: HTTP and FastCGI on top of the Engine's public API.
         server:
@@ -72,6 +73,7 @@ linters:
             - github.com/tetratelabs/wazero
             - github.com/mpyw/gophper$
             - github.com/mpyw/gophper/internal/fcgi$
+            - github.com/mpyw/gophper/internal/hostpath$
 
         # The command wires the public packages together.
         cmd:
@@ -94,6 +96,14 @@ linters:
           list-mode: strict
           files:
             - "**/internal/fcgi/*.go"
+          allow:
+            - $gostd
+
+        # Host paths as PHP sees them.
+        hostpath:
+          list-mode: strict
+          files:
+            - "**/internal/hostpath/*.go"
           allow:
             - $gostd
 
@@ -133,6 +143,7 @@ linters:
             - $gostd
             - github.com/tetratelabs/wazero
             - github.com/mpyw/gophper/internal/wasi$
+            - golang.org/x/sys/windows$
 
         # Child processes for the guest. Pipes and sockets come from hostnet.
         hostproc:
@@ -163,6 +174,8 @@ linters:
             - $gostd
             - github.com/tetratelabs/wazero
             - github.com/mpyw/gophper/internal/wasi$
+            - github.com/mpyw/gophper/internal/hostpath$
+            - golang.org/x/sys/windows$
 
         dylink:
           list-mode: strict

@@ -1,4 +1,4 @@
-//go:build !unix
+//go:build !unix && !windows
 
 //declscope:namespace system
 
@@ -12,5 +12,6 @@ import (
 // errSystemLockBusy is the error of a non-blocking attempt on a held lock.
 var errSystemLockBusy = errors.New("hostsys: the file is locked")
 
-// systemLockFile always succeeds: only Unix hosts lock files for now.
-func systemLockFile(*os.File, int32) error { return nil }
+// systemLockFile fails: this host has no file locks gophper knows of. A
+// lock that succeeded without excluding anyone would let two writers in.
+func systemLockFile(*os.File, int32) error { return errors.ErrUnsupported }

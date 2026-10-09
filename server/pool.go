@@ -18,6 +18,7 @@ import (
 	"github.com/tetratelabs/wazero"
 
 	"github.com/mpyw/gophper"
+	"github.com/mpyw/gophper/internal/hostpath"
 )
 
 // pool runs php-cgi for FastCGIServer and HTTPHandler: on workers that
@@ -178,9 +179,9 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 	fs := wazero.NewFSConfig()
 	for _, m := range cfg.Mounts {
 		if m.ReadOnly {
-			fs = fs.WithReadOnlyDirMount(m.Dir, m.Dir)
+			fs = fs.WithReadOnlyDirMount(m.Dir, hostpath.Guest(m.Dir))
 		} else {
-			fs = fs.WithDirMount(m.Dir, m.Dir)
+			fs = fs.WithDirMount(m.Dir, hostpath.Guest(m.Dir))
 		}
 	}
 	fs = fs.WithDirMount(tempDir, "/tmp").WithReadOnlyDirMount(iniDir, poolBootstrapDir)
@@ -296,10 +297,14 @@ func (p *pool) hostPath(path string) (string, bool, bool) {
 	if rel, ok := strings.CutPrefix(path, poolOpcacheDir); ok && p.opcacheDir != "" && (rel == "" || rel[0] == '/') {
 		return filepath.Join(p.opcacheDir, rel), true, true
 	}
+	host, ok := hostpath.Host(path)
+	if !ok {
+		return "", false, false
+	}
 	// The last mount wins, as in the FS config.
 	for _, m := range slices.Backward(p.mounts) {
-		if m.contains(path) {
-			return path, !m.ReadOnly, true
+		if m.contains(host) {
+			return host, !m.ReadOnly, true
 		}
 	}
 	return "", false, false

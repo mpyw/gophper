@@ -14,9 +14,11 @@ import (
 //
 //declscope:shared // socket.go
 func errnoFrom(err error) int32 {
-	for _, m := range errnoBySyscall {
-		if errors.Is(err, m.sys) {
-			return m.wasi
+	for _, table := range [][]errnoMapping{errnoBySyscall, errnoByPlatform} {
+		for _, m := range table {
+			if errors.Is(err, m.sys) {
+				return m.wasi
+			}
 		}
 	}
 	switch {
@@ -35,10 +37,13 @@ func errnoFrom(err error) int32 {
 	return wasi.EIO
 }
 
-var errnoBySyscall = []struct {
+// errnoMapping pairs a host error number with the WASI errno it means.
+type errnoMapping struct {
 	sys  syscall.Errno
 	wasi int32
-}{
+}
+
+var errnoBySyscall = []errnoMapping{
 	{syscall.ECONNREFUSED, wasi.ECONNREFUSED},
 	{syscall.ECONNRESET, wasi.ECONNRESET},
 	{syscall.ECONNABORTED, wasi.ECONNABORTED},

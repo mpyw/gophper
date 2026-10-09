@@ -28,7 +28,6 @@ import (
 	"time"
 
 	phpext "github.com/mpyw/gophper-wasm/ext"
-	"github.com/tetratelabs/wazero"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/crypto/acme/autocert"
 
@@ -454,13 +453,13 @@ func phpAction(ctx context.Context, cmd *cli.Command) (err error) {
 	code, err := engine.RunCLI(context.WithoutCancel(ctx), gophper.Options{
 		Args:   cmd.Args().Slice(),
 		Env:    os.Environ(),
-		Dir:    wd,
+		Dir:    gophper.HostToGuest(wd),
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
-		FS:     wazero.NewFSConfig().WithDirMount("/", "/"),
-		// The host's root is mounted at "/", so paths are the same.
-		HostPath:  func(path string) (string, bool, bool) { return path, true, true },
+		// The whole host, at the same paths, or under /c and so on on Windows.
+		FS:        gophper.HostFS(),
+		HostPath:  gophper.HostPaths,
 		Processes: true,
 		Signals:   signals,
 	})

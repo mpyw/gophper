@@ -11,11 +11,10 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/tetratelabs/wazero"
 
 	"github.com/mpyw/gophper"
 )
@@ -30,9 +29,9 @@ func runPHP(t *testing.T, code string) (string, int) {
 		Args:   []string{"-r", code},
 		Stdout: &out,
 		Stderr: &out,
-		FS:     wazero.NewFSConfig().WithDirMount("/", "/"),
-		// As the CLI: the host's root is mounted at "/".
-		HostPath:  func(path string) (string, bool, bool) { return path, true, true },
+		// As the CLI: the whole host is mounted.
+		FS:        gophper.HostFS(),
+		HostPath:  gophper.HostPaths,
 		Processes: true,
 	})
 	if err != nil {
@@ -179,8 +178,7 @@ func TestSocketServerInPHP(t *testing.T) {
 }
 
 func TestSocketUnix(t *testing.T) {
-	// macOS limits socket paths to 104 bytes, so not under t.TempDir().
-	dir, err := os.MkdirTemp("/tmp", "gophper")
+	dir, err := os.MkdirTemp(netShortTempBase(), "gophper")
 	if err != nil {
 		t.Skip(err)
 	}
@@ -191,7 +189,7 @@ func TestSocketUnix(t *testing.T) {
 		$fp = stream_socket_client("unix://%s", $errno, $errstr, 5) or die("$errno $errstr");
 		fwrite($fp, "over unix\n");
 		echo fgets($fp);
-	`, path))
+	`, gophper.HostToGuest(path)))
 	if code != 0 || out != "echo: over unix\n" {
 		t.Errorf("exit %d\n%s", code, out)
 	}
@@ -250,7 +248,7 @@ func TestSocketCancelWhileReading(t *testing.T) {
 	start := time.Now()
 	_, err = newTestEngine(t).RunCLI(ctx, gophper.Options{
 		Args: []string{"-r", fmt.Sprintf(`$fp = fsockopen("127.0.0.1", %d); fgets($fp);`, addr.Port)},
-		FS:   wazero.NewFSConfig().WithDirMount("/", "/"),
+		FS:   gophper.HostFS(),
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Errorf("err = %v, want context.DeadlineExceeded", err)
@@ -294,6 +292,9 @@ func TestSocketDNSRecords(t *testing.T) {
 }
 
 func TestSocketPairInPHP(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("the child is sh, which Windows lacks")
+	}
 	out, code := runPHP(t, `
 		[$a, $b] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
 		fwrite($a, "to b\n");
@@ -372,8 +373,10 @@ func TestSocketUDPServerInPHP(t *testing.T) {
 }
 
 func TestSocketUnixDatagramInPHP(t *testing.T) {
-	// macOS limits socket paths to 104 bytes, so not under t.TempDir().
-	dir, err := os.MkdirTemp("/tmp", "gophper")
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no SOCK_DGRAM for AF_UNIX")
+	}
+	dir, err := os.MkdirTemp(netShortTempBase(), "gophper")
 	if err != nil {
 		t.Skip(err)
 	}
@@ -383,7 +386,7 @@ func TestSocketUnixDatagramInPHP(t *testing.T) {
 		$client = stream_socket_client("udg://%[1]s", $errno, $errstr) or die("$errno $errstr");
 		fwrite($client, "over udg");
 		var_dump(fread($server, 100));
-	`, filepath.Join(dir, "dgram.sock")))
+	`, gophper.HostToGuest(filepath.Join(dir, "dgram.sock"))))
 	if code != 0 || out != "string(8) \"over udg\"\n" {
 		t.Errorf("exit %d\n%s", code, out)
 	}
@@ -457,4 +460,14 @@ func TestSocketOptionsAndShutdown(t *testing.T) {
 	if code != 0 || out != want {
 		t.Errorf("exit %d\n%s", code, out)
 	}
+}
+
+// netShortTempBase returns where to make a directory for a socket. macOS
+// limits socket paths to 104 bytes, so not under t.TempDir(). Windows has
+// no /tmp, and its temporary directory is short enough.
+func netShortTempBase() string {
+	if runtime.GOOS == "windows" {
+		return ""
+	}
+	return "/tmp"
 }

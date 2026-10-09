@@ -7,7 +7,8 @@ import (
 
 // Mount is a host directory PHP may access.
 type Mount struct {
-	// Dir is an absolute host path. PHP sees it at the same path.
+	// Dir is an absolute host path. PHP sees it at the same path, or on
+	// Windows at /<drive>/..., as package hostpath maps it.
 	Dir      string
 	ReadOnly bool
 }

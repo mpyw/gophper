@@ -3,14 +3,12 @@
 package hostnet
 
 import (
-	"bufio"
 	"context"
 	"crypto/rand"
 	"encoding/binary"
 	"errors"
 	"io"
 	"net"
-	"os"
 	"strings"
 	"time"
 
@@ -33,7 +31,7 @@ const dnsTimeout = 5 * time.Second
 // the answer, cut to outCap, or -h_errno.
 //
 // Go's resolver offers no raw queries, so the packet is built here and
-// sent to the servers in /etc/resolv.conf.
+// sent to the host's nameservers.
 func (x dnsExports) query(ctx context.Context, m api.Module, namePtr, nameLen uint32, class, typ int32, outPtr, outCap uint32) int32 {
 	b, _ := m.Memory().Read(namePtr, nameLen)
 	q, id, err := dnsBuildQuery(string(b), uint16(class), uint16(typ))
@@ -157,20 +155,9 @@ func dnsExchange(ctx context.Context, server string, q []byte, id uint16) ([]byt
 	return answer, nil
 }
 
-// dnsServers reads the nameservers of /etc/resolv.conf, as host:port.
+// dnsServers returns the host's nameservers, as host:port.
 func dnsServers() []string {
-	var servers []string
-	if f, err := os.Open("/etc/resolv.conf"); err == nil {
-		// Opened read-only, so closing it loses nothing.
-		defer func() { _ = f.Close() }()
-		s := bufio.NewScanner(f)
-		for s.Scan() {
-			fields := strings.Fields(s.Text())
-			if len(fields) >= 2 && fields[0] == "nameserver" {
-				servers = append(servers, net.JoinHostPort(strings.SplitN(fields[1], "%", 2)[0], "53"))
-			}
-		}
-	}
+	servers := dnsSystemServers()
 	if len(servers) == 0 {
 		// The default of glibc and Go's resolver.
 		servers = []string{"127.0.0.1:53", "[::1]:53"}

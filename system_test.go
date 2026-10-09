@@ -26,6 +26,7 @@ func TestSystemHost(t *testing.T) {
 	if err := os.WriteFile(file, nil, 0o750); err != nil {
 		t.Fatal(err)
 	}
+	guest := gophper.HostToGuest(file)
 	for _, tt := range []struct {
 		name string
 		code string
@@ -36,21 +37,21 @@ func TestSystemHost(t *testing.T) {
 		// wasi-libc's utsname holds 64 bytes of it, so php_uname() may cut a
 		// longer one short, as macOS CI runners' names are.
 		{"hostname", `echo gethostname() !== '' && substr(gethostname(), 0, 64) === php_uname('n') ? 'same' : 'differ';`, "same"},
-		{"fileperms", fmt.Sprintf(`printf('%%o', fileperms(%q) & 0777);`, file), "750"},
-		{"fileowner", fmt.Sprintf(`echo fileowner(%q);`, file), fmt.Sprint(os.Getuid())},
-		{"chmod", fmt.Sprintf(`chmod(%[1]q, 0640); clearstatcache(); printf('%%o', fileperms(%[1]q) & 0777);`, file), "640"},
+		{"fileperms", fmt.Sprintf(`printf('%%o', fileperms(%q) & 0777);`, guest), "750"},
+		{"fileowner", fmt.Sprintf(`echo fileowner(%q);`, guest), fmt.Sprint(os.Getuid())},
+		{"chmod", fmt.Sprintf(`chmod(%[1]q, 0640); clearstatcache(); printf('%%o', fileperms(%[1]q) & 0777);`, guest), "640"},
 		{"getpwnam", `$u = posix_getpwuid(posix_getuid()); echo posix_getpwnam($u['name'])['uid'] === posix_getuid() ? 'same' : 'differ';`, "same"},
 		{"missing user", `var_export([posix_getpwnam('gophper-no-such-user'), posix_getpwuid(987654)]);`, "array (\n  0 => false,\n  1 => false,\n)"},
 		{"group", `$g = posix_getgrgid(posix_getgid()); echo $g !== false && posix_getgrnam($g['name'])['gid'] === posix_getgid() ? 'same' : 'differ';`, "same"},
 		{"missing group", `var_export([posix_getgrnam('gophper-no-such-group'), posix_getgrgid(987654)]);`, "array (\n  0 => false,\n  1 => false,\n)"},
-		{"chown to self", fmt.Sprintf(`var_export([chown(%[1]q, posix_getuid()), chgrp(%[1]q, posix_getgid())]);`, file), "array (\n  0 => true,\n  1 => true,\n)"},
-		{"chown missing", fmt.Sprintf(`var_export(@chown(%q, posix_getuid())); echo ' ', error_get_last()['message'];`, file+".missing"), "false chown(): No such file or directory"},
+		{"chown to self", fmt.Sprintf(`var_export([chown(%[1]q, posix_getuid()), chgrp(%[1]q, posix_getgid())]);`, guest), "array (\n  0 => true,\n  1 => true,\n)"},
+		{"chown missing", fmt.Sprintf(`var_export(@chown(%q, posix_getuid())); echo ' ', error_get_last()['message'];`, guest+".missing"), "false chown(): No such file or directory"},
 		{"chmod special bits", fmt.Sprintf(`
 			mkdir(%[1]q); chmod(%[1]q, 01777); chmod(%[2]q, 04750); clearstatcache();
-			printf('%%o %%o', fileperms(%[1]q) & 07777, fileperms(%[2]q) & 07777); chmod(%[2]q, 0750);`, filepath.Join(dir, "sticky"), file), "1777 4750"},
+			printf('%%o %%o', fileperms(%[1]q) & 07777, fileperms(%[2]q) & 07777); chmod(%[2]q, 0750);`, gophper.HostToGuest(filepath.Join(dir, "sticky")), guest), "1777 4750"},
 		{"flock", fmt.Sprintf(`
 			$a = fopen(%[1]q, 'r'); $b = fopen(%[1]q, 'r');
-			var_export([flock($a, LOCK_EX | LOCK_NB), flock($b, LOCK_EX | LOCK_NB), flock($a, LOCK_UN), flock($b, LOCK_EX | LOCK_NB)]);`, file),
+			var_export([flock($a, LOCK_EX | LOCK_NB), flock($b, LOCK_EX | LOCK_NB), flock($a, LOCK_UN), flock($b, LOCK_EX | LOCK_NB)]);`, guest),
 			"array (\n  0 => true,\n  1 => false,\n  2 => true,\n  3 => true,\n)"},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
@@ -70,13 +71,18 @@ func TestSystemSandbox(t *testing.T) {
 	if err := os.WriteFile(file, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// Windows has no 0600, so compare with the mode it got.
+	before, err := os.Stat(file)
+	if err != nil {
+		t.Fatal(err)
+	}
 	var out bytes.Buffer
-	code := fmt.Sprintf(`var_export([@exec('echo escaped'), @proc_open(['echo'], [], $p), @chmod(%q, 0777)]);`, file)
+	code := fmt.Sprintf(`var_export([@exec('echo escaped'), @proc_open(['echo'], [], $p), @chmod(%q, 0777)]);`, gophper.HostToGuest(file))
 	exit, err := newTestEngine(t).RunCLI(context.Background(), gophper.Options{
 		Args:   []string{"-r", code},
 		Stdout: &out,
 		Stderr: &out,
-		FS:     wazero.NewFSConfig().WithDirMount(dir, dir),
+		FS:     wazero.NewFSConfig().WithDirMount(dir, gophper.HostToGuest(dir)),
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -84,13 +90,13 @@ func TestSystemSandbox(t *testing.T) {
 	if want := "array (\n  0 => false,\n  1 => false,\n  2 => false,\n)"; exit != 0 || out.String() != want {
 		t.Errorf("exit %d, got %q, want %q", exit, out.String(), want)
 	}
-	if st, err := os.Stat(file); err != nil || st.Mode().Perm() != 0o600 {
+	if st, err := os.Stat(file); err != nil || st.Mode() != before.Mode() {
 		t.Errorf("the host file changed: %v %v", st.Mode(), err)
 	}
 }
 
-// runSystemPHP runs code as runPHP does, with the host paths under readOnly
-// read-only. It returns the error of RunCLI.
+// runSystemPHP runs code as runPHP does, with the host paths under the host
+// path readOnly read-only. It returns the error of RunCLI.
 func runSystemPHP(ctx context.Context, t *testing.T, code, readOnly string) (string, int, error) {
 	t.Helper()
 	var out bytes.Buffer
@@ -98,9 +104,10 @@ func runSystemPHP(ctx context.Context, t *testing.T, code, readOnly string) (str
 		Args:   []string{"-r", code},
 		Stdout: &out,
 		Stderr: &out,
-		FS:     wazero.NewFSConfig().WithDirMount("/", "/"),
+		FS:     gophper.HostFS(),
 		HostPath: func(path string) (string, bool, bool) {
-			return path, readOnly == "" || !strings.HasPrefix(path, readOnly), true
+			host, writable, ok := gophper.HostPaths(path)
+			return host, writable && (readOnly == "" || !strings.HasPrefix(host, readOnly)), ok
 		},
 	})
 	return out.String(), exit, err
@@ -130,10 +137,10 @@ func TestSystemPermissions(t *testing.T) {
 		want string
 		root bool // whether the test makes sense as root
 	}{
-		{"chmod read-only", fmt.Sprintf(`var_export(@chmod(%q, 0777)); echo ' ', error_get_last()['message'];`, kept), "false chmod(): Read-only file system", true},
-		{"chown read-only", fmt.Sprintf(`var_export(@chown(%q, posix_getuid())); echo ' ', error_get_last()['message'];`, kept), "false chown(): Read-only file system", true},
-		{"chown to root", fmt.Sprintf(`var_export(@chown(%q, 0)); echo ' ', error_get_last()['message'];`, own), "false chown(): Operation not permitted", false},
-		{"fileowner", fmt.Sprintf(`echo fileowner(%q) === posix_getuid() ? 'mine' : 'not mine';`, kept), "mine", true},
+		{"chmod read-only", fmt.Sprintf(`var_export(@chmod(%q, 0777)); echo ' ', error_get_last()['message'];`, gophper.HostToGuest(kept)), "false chmod(): Read-only file system", true},
+		{"chown read-only", fmt.Sprintf(`var_export(@chown(%q, posix_getuid())); echo ' ', error_get_last()['message'];`, gophper.HostToGuest(kept)), "false chown(): Read-only file system", true},
+		{"chown to root", fmt.Sprintf(`var_export(@chown(%q, 0)); echo ' ', error_get_last()['message'];`, gophper.HostToGuest(own)), "false chown(): Operation not permitted", false},
+		{"fileowner", fmt.Sprintf(`echo fileowner(%q) === posix_getuid() ? 'mine' : 'not mine';`, gophper.HostToGuest(kept)), "mine", true},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if !tt.root && os.Getuid() == 0 {
@@ -160,10 +167,12 @@ func TestSystemLockInstances(t *testing.T) {
 	}
 	dir := t.TempDir()
 	file := filepath.Join(dir, "f")
-	tried := filepath.Join(dir, "tried")
 	if err := os.WriteFile(file, nil, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	// From here on, paths are the ones PHP sees.
+	file, dir = gophper.HostToGuest(file), gophper.HostToGuest(dir)
+	tried := dir + "/tried"
 	// The holder keeps its lock until the other has tried, then exits
 	// without unlocking: the end of the run releases it.
 	holder := fmt.Sprintf(`
@@ -171,14 +180,14 @@ func TestSystemLockInstances(t *testing.T) {
 		file_put_contents(%q, '');
 		$end = microtime(true) + 10;
 		while (!file_exists(%q) && microtime(true) < $end) { usleep(5000); clearstatcache(); }
-		echo "leaving\n";`, file, filepath.Join(dir, "held"), tried)
+		echo "leaving\n";`, file, dir+"/held", tried)
 	waiter := fmt.Sprintf(`
 		$end = microtime(true) + 10;
 		while (!file_exists(%q) && microtime(true) < $end) { usleep(5000); clearstatcache(); }
 		$f = fopen(%q, 'r');
 		var_export(flock($f, LOCK_EX | LOCK_NB, $would)); echo " $would\n";
 		file_put_contents(%q, '');
-		var_export(flock($f, LOCK_EX)); echo "\n";`, filepath.Join(dir, "held"), file, tried)
+		var_export(flock($f, LOCK_EX)); echo "\n";`, dir+"/held", file, tried)
 	type result struct {
 		out  string
 		exit int
@@ -211,7 +220,7 @@ func TestSystemLockCanceled(t *testing.T) {
 	out, _, err := runSystemPHP(ctx, t, fmt.Sprintf(`
 		$a = fopen(%[1]q, 'r'); $b = fopen(%[1]q, 'r');
 		flock($a, LOCK_EX); echo "locked\n"; touch(%[2]q);
-		flock($b, LOCK_EX); echo "not canceled\n";`, file, ready), "")
+		flock($b, LOCK_EX); echo "not canceled\n";`, gophper.HostToGuest(file), gophper.HostToGuest(ready)), "")
 	if !errors.Is(err, context.Canceled) {
 		t.Errorf("err %v, want the cancel", err)
 	}

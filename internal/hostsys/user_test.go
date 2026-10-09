@@ -1,3 +1,7 @@
+//go:build !windows
+
+//declscope:namespace user
+
 package hostsys
 
 import (
