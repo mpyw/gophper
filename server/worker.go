@@ -37,6 +37,11 @@ type poolWorkers struct {
 	mu          sync.Mutex
 	idle        []*poolWorker
 	all         map[*poolWorker]struct{}
+	// running counts the goroutines of every worker, stopping ones too,
+	// so that poolStopWorkers returns only once no php-cgi runs. The
+	// engine must not close under one. closed refuses new workers then.
+	running sync.WaitGroup
+	closed  bool
 }
 
 // poolWorker is one running php-cgi.
@@ -113,7 +118,17 @@ func (p *pool) poolStart(sock string) (*poolWorker, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	w := &poolWorker{sock: sock, cancel: cancel, done: make(chan struct{})}
 	env := append(slices.Clone(p.env), "PHP_FCGI_MAX_REQUESTS=0")
+	p.workers.mu.Lock()
+	if p.workers.closed {
+		p.workers.mu.Unlock()
+		cancel()
+		return nil, errors.New("worker: the server is closed")
+	}
+	p.workers.all[w] = struct{}{}
+	p.workers.running.Add(1)
+	p.workers.mu.Unlock()
 	go func() {
+		defer p.workers.running.Done()
 		defer close(w.done)
 		_, err := p.engine.RunCGI(ctx, gophper.Options{
 			Args: []string{"-b", sock}, Env: env, Stdout: p.errorLog, Stderr: p.errorLog, FS: p.fs,
@@ -123,9 +138,6 @@ func (p *pool) poolStart(sock string) (*poolWorker, error) {
 			writePoolLog(p.errorLog, "gophper: worker: %v\n", err)
 		}
 	}()
-	p.workers.mu.Lock()
-	p.workers.all[w] = struct{}{}
-	p.workers.mu.Unlock()
 
 	deadline := time.After(poolWorkerStartTimeout)
 	for {
@@ -162,25 +174,25 @@ func (p *pool) poolStop(w *poolWorker) {
 	w.cancel()
 	p.workers.mu.Lock()
 	delete(p.workers.all, w)
+	p.workers.running.Add(1)
 	p.workers.mu.Unlock()
 	go func() {
+		defer p.workers.running.Done()
 		<-w.done
 		_ = os.Remove(w.sock) // php-cgi may have removed it, or never made it
 	}()
 }
 
-// poolStopWorkers stops every worker and waits for them.
+// poolStopWorkers stops every worker, and waits for them and for those
+// already stopping.
 func (p *pool) poolStopWorkers() {
 	p.workers.mu.Lock()
-	all := make([]*poolWorker, 0, len(p.workers.all))
+	p.workers.closed = true
 	for w := range p.workers.all {
-		all = append(all, w)
+		w.cancel()
 	}
 	p.workers.all = map[*poolWorker]struct{}{}
 	p.workers.idle = nil
 	p.workers.mu.Unlock()
-	for _, w := range all {
-		w.cancel()
-		<-w.done
-	}
+	p.workers.running.Wait()
 }

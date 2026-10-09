@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"net/textproto"
@@ -220,9 +221,7 @@ func params(root, method, uri string, extra map[string]string) map[string]string
 		"HTTP_HOST":         "localhost",
 		"HTTP_USER_AGENT":   "gophper-test",
 	}
-	for k, v := range extra {
-		p[k] = v
-	}
+	maps.Copy(p, extra)
 	return p
 }
 

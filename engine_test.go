@@ -9,6 +9,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -336,4 +337,49 @@ func TestEngineMissingExtensionDir(t *testing.T) {
 	if err != nil || code != 0 || !strings.Contains(out.String(), "Unable to load dynamic library 'dl_test'") || !strings.HasSuffix(out.String(), "bool(false)\n") {
 		t.Errorf("exit %d, err %v\n%s", code, err, out.String())
 	}
+}
+
+// TestEngineCloseDuringRun closes the engine under a running script. Close
+// stops the run and waits for it, and a later run is refused.
+func TestEngineCloseDuringRun(t *testing.T) {
+	engine, err := gophper.NewEngine(context.Background(), gophper.DefaultEngineConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := make(chan struct{})
+	ended := make(chan error, 1)
+	go func() {
+		_, err := engine.RunCLI(context.Background(), gophper.Options{
+			Args:   []string{"-r", `echo "started\n"; for (;;) {}`},
+			Stdout: &engineFirstWrite{f: func() { close(started) }},
+		})
+		ended <- err
+	}()
+	select {
+	case <-started:
+	case <-time.After(time.Minute):
+		t.Fatal("the script did not start")
+	}
+	if err := engine.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-ended:
+	default:
+		t.Fatal("Close returned before the run ended")
+	}
+	if _, err := engine.RunCLI(context.Background(), gophper.Options{Args: []string{"-r", "echo 1;"}}); !errors.Is(err, gophper.ErrEngineClosed) {
+		t.Errorf("a run after Close: %v, want ErrEngineClosed", err)
+	}
+}
+
+// engineFirstWrite calls f on the first write.
+type engineFirstWrite struct {
+	once sync.Once
+	f    func()
+}
+
+func (w *engineFirstWrite) Write(p []byte) (int, error) {
+	w.once.Do(w.f)
+	return len(p), nil
 }

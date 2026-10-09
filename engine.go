@@ -42,7 +42,18 @@ type Engine struct {
 	// Each binary is compiled on first use, so a CLI run does not pay for php-cgi.
 	cliModule func() (wazero.CompiledModule, error)
 	cgiModule func() (wazero.CompiledModule, error)
+
+	// Close cancels runs through closing, and waits for them with runs:
+	// closing the runtime under a running module crashed inside wazero.
+	closing   context.Context
+	closeRuns context.CancelFunc
+	mu        sync.Mutex
+	closed    bool
+	runs      sync.WaitGroup
 }
+
+// ErrEngineClosed is returned by a run that starts after Close.
+var ErrEngineClosed = errors.New("gophper: the engine is closed")
 
 // NewEngine prepares the runtime. The PHP binaries are compiled on first use.
 func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
@@ -56,6 +67,7 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 		// Extended constant expressions place a side module's data at __memory_base.
 		WithCoreFeatures(api.CoreFeaturesV2 | experimental.CoreFeaturesExceptionHandling | experimental.CoreFeaturesExtendedConst)
 	e := &Engine{extensionDir: cfg.ExtensionDir, phpBinary: cfg.PHPBinary}
+	e.closing, e.closeRuns = context.WithCancel(context.Background())
 	if cfg.CacheDir != "" {
 		cache, err := wazero.NewCompilationCacheWithDir(cfg.CacheDir)
 		if err != nil {
@@ -183,8 +195,15 @@ func engineBinary(cacheDir string, bin func() ([]byte, error), digest string) ([
 	return b, nil
 }
 
-// Close releases the runtime and the compilation cache.
+// Close cancels the runs in progress and waits for them, then releases the
+// runtime and the compilation cache. A run that starts after it returns
+// ErrEngineClosed.
 func (e *Engine) Close(ctx context.Context) error {
+	e.mu.Lock()
+	e.closed = true
+	e.mu.Unlock()
+	e.closeRuns()
+	e.runs.Wait()
 	err := e.runtime.Close(ctx)
 	if e.cache != nil {
 		err = errors.Join(err, e.cache.Close(ctx))
@@ -205,12 +224,22 @@ func (e *Engine) RunCGI(ctx context.Context, opts Options) (int, error) {
 }
 
 func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule, error), argv0 string, opts Options) (code int, err error) {
+	e.mu.Lock()
+	if e.closed {
+		e.mu.Unlock()
+		return 0, ErrEngineClosed
+	}
+	e.runs.Add(1)
+	e.mu.Unlock()
+	defer e.runs.Done()
+
 	mod, err := compiled()
 	if err != nil {
 		return 0, err
 	}
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
+	defer context.AfterFunc(e.closing, cancel)()
 	// PHPBinary's directory holds "php" for child processes too.
 	binDir := ""
 	if e.phpBinary != "" {

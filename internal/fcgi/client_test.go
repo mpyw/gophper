@@ -201,7 +201,7 @@ func TestDoWriterFails(t *testing.T) {
 				)
 			})
 			full := errors.New("disk full")
-			stdout, stderr := io.Writer(io.Discard), io.Writer(io.Discard)
+			stdout, stderr := io.Discard, io.Discard
 			if stream == typeStdout {
 				stdout = fcgiFailingWriter{full}
 			} else {

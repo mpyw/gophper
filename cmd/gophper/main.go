@@ -391,9 +391,9 @@ func phpConfig(cmd *cli.Command) (server.PHPConfig, func() error, error) {
 		NoProcesses: cmd.Bool("no-processes"),
 		OpcacheDir:  cmd.String("opcache-dir"),
 		NoWorkers:   cmd.Bool("no-workers"),
-		MaxRequests: int(cmd.Int("max-requests")),
+		MaxRequests: cmd.Int("max-requests"),
 		NoOpcache:   cmd.Bool("no-opcache"),
-		Concurrency: int(cmd.Int("concurrency")),
+		Concurrency: cmd.Int("concurrency"),
 		MaxWaitTime: cmd.Duration("max-wait-time"),
 		Env:         cmd.StringSlice("env"),
 	}

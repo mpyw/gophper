@@ -152,3 +152,26 @@ func TestPoolWorkerCannotListen(t *testing.T) {
 		t.Errorf("%d workers left", len(p.workers.all))
 	}
 }
+
+// TestPoolStopWaitsForStopping stops a worker, as a canceled request does,
+// then closes the pool at once. Closing must wait for that worker too: the
+// engine closing under a running php-cgi crashed in wazero.
+func TestPoolStopWaitsForStopping(t *testing.T) {
+	p, vars := poolForTest(t)
+	p.poolRunForTest(t, vars)
+	idle := p.poolIdleForTest()
+	if len(idle) != 1 {
+		t.Fatalf("%d idle workers, want 1", len(idle))
+	}
+	w := idle[0]
+	p.poolStop(w)
+	p.poolStopWorkers()
+	select {
+	case <-w.done:
+	default:
+		t.Fatal("poolStopWorkers returned while a stopping worker still ran")
+	}
+	if _, err := p.poolStart(filepath.Join(t.TempDir(), "late.sock")); err == nil {
+		t.Error("a worker started after poolStopWorkers")
+	}
+}

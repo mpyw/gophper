@@ -329,9 +329,7 @@ func (h *HTTPHandler) servePHP(w *httpRecorder, r *http.Request, route httpRoute
 	} else if hdr.Get("Location") != "" {
 		status = http.StatusFound
 	}
-	for k, vs := range hdr {
-		w.Header()[k] = vs
-	}
+	maps.Copy(w.Header(), hdr)
 	w.WriteHeader(status)
 
 	// Copy as PHP writes, so flush() in PHP reaches the client.

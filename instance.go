@@ -36,8 +36,8 @@ func newEngineInstance(ctx context.Context, cancel context.CancelFunc, extension
 	if hostPath == nil {
 		hostPath = func(string) (string, bool, bool) { return "", false, false }
 	}
-	inst.processes = hostproc.NewProcesses(vm, inst.sockets, opts.Processes, hostproc.ProcessesHostPath(hostPath), binDir, opts.Stdin, opts.Stdout, opts.Stderr)
-	inst.system = hostsys.NewSystem(vm, hostsys.SystemHostPath(hostPath))
+	inst.processes = hostproc.NewProcesses(vm, inst.sockets, opts.Processes, hostPath, binDir, opts.Stdin, opts.Stdout, opts.Stderr)
+	inst.system = hostsys.NewSystem(vm, hostPath)
 	fns := make(map[string]hostfn.Function, len(opts.Functions))
 	for name, fn := range opts.Functions {
 		fns[name] = hostfn.Function(fn)
