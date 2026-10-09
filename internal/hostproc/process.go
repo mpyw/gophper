@@ -212,10 +212,19 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 		case processChildStdio:
 			switch value {
 			case 0:
-				if f, ok := p.stdin.(*os.File); ok {
-					r = f
+				if sf, ok := p.stdin.(*os.File); ok {
+					r = sf
 				} else if p.stdin != nil {
-					r = processNoStdin{}
+					// No file to share, as a real fd would be. Feeding a
+					// pipe from it would take what the child never reads,
+					// and PHP would lose it. The child reads nothing, as a
+					// php-fpm child does.
+					null, err := os.Open(os.DevNull)
+					if err != nil {
+						return errnoFrom(err)
+					}
+					release = append(release, func() { _ = null.Close() }) // the child has its own copy
+					r = null
 				}
 			case 1:
 				w = p.stdout.writer()
@@ -243,18 +252,6 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 		}
 		if f != nil {
 			r, w = f, f
-		}
-		if _, isFile := r.(*os.File); r != nil && !isFile {
-			// A stdin that is no file cannot be shared, as a real fd would
-			// be. Feeding a pipe from it would take what the child never
-			// reads, and PHP would lose it. The child reads nothing, as a
-			// php-fpm child does.
-			null, err := os.Open(os.DevNull)
-			if err != nil {
-				return errnoFrom(err)
-			}
-			release = append(release, func() { _ = null.Close() }) // the child has its own copy
-			r = null
 		}
 
 		switch fd {
@@ -463,12 +460,6 @@ func processWaitStatus(ps *os.ProcessState) int32 {
 	}
 	return int32(ps.ExitCode()&0xff) << 8
 }
-
-// processNoStdin stands for a stdin that is no file: spawn gives the child
-// the null device for it.
-type processNoStdin struct{}
-
-func (processNoStdin) Read([]byte) (int, error) { return 0, io.EOF }
 
 // processGuardedWriter is the instance's stdout or stderr as children see it. A
 // child that outlives the instance must not write to, say, an HTTP

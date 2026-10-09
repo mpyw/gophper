@@ -3,11 +3,20 @@
 package main
 
 import (
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/pem"
+	"math/big"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
 	"testing"
+	"time"
 
 	"github.com/mpyw/gophper"
 )
@@ -58,4 +67,60 @@ func TestParseSize(t *testing.T) {
 			t.Errorf("parseSize(%q) = %d", in, got)
 		}
 	}
+}
+
+// TestServeServers builds serve's servers without starting them: plain
+// HTTP by default, a certificate's TLS, or Let's Encrypt for domains, with
+// :80 for its challenge.
+func TestServeServers(t *testing.T) {
+	h := http.NotFoundHandler()
+	plain, err := serveServers(h, "", nil, "", "")
+	if err != nil || len(plain) != 1 || plain[0].Addr != "127.0.0.1:8080" || plain[0].TLSConfig != nil {
+		t.Errorf("plain: %v, %v", plain, err)
+	}
+	acme, err := serveServers(h, "", []string{"gophper.invalid"}, "", "")
+	if err != nil || len(acme) != 2 {
+		t.Fatalf("acme: %v, %v", acme, err)
+	}
+	if acme[0].Addr != ":80" || acme[0].Handler == nil || acme[1].Addr != ":443" || acme[1].TLSConfig == nil || acme[1].TLSConfig.GetCertificate == nil {
+		t.Errorf("acme: %s %v, %s %v", acme[0].Addr, acme[0].Handler, acme[1].Addr, acme[1].TLSConfig)
+	}
+	if got, err := serveServers(h, "127.0.0.1:0", []string{"gophper.invalid"}, "", ""); err != nil || got[1].Addr != "127.0.0.1:0" {
+		t.Errorf("acme with --listen: %v, %v", got, err)
+	}
+	cert, key := serveTestCertificate(t)
+	tlsSrv, err := serveServers(h, "127.0.0.1:0", nil, cert, key)
+	if err != nil || len(tlsSrv) != 1 || tlsSrv[0].TLSConfig == nil || len(tlsSrv[0].TLSConfig.Certificates) != 1 {
+		t.Errorf("certificate: %v, %v", tlsSrv, err)
+	}
+	if _, err := serveServers(h, "", nil, cert+".missing", key); err == nil {
+		t.Error("a missing certificate was accepted")
+	}
+}
+
+// serveTestCertificate writes a self-signed certificate and its key.
+func serveTestCertificate(t *testing.T) (cert, key string) {
+	t.Helper()
+	priv, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmpl := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "localhost"}, NotBefore: time.Now(), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, tmpl, tmpl, &priv.PublicKey, priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keyDER, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir := t.TempDir()
+	cert, key = filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")
+	if err := os.WriteFile(cert, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(key, pem.EncodeToMemory(&pem.Block{Type: "EC PRIVATE KEY", Bytes: keyDER}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return cert, key
 }

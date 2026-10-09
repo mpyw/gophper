@@ -576,34 +576,10 @@ func serveAction(ctx context.Context, cmd *cli.Command) (err error) {
 	}
 	defer func() { err = errors.Join(err, h.Close()) }()
 
-	listen := cmd.String("listen")
-	switch {
-	case listen != "":
-	case len(domains) > 0:
-		listen = ":443"
-	default:
-		listen = "127.0.0.1:8080"
+	servers, err := serveServers(h, cmd.String("listen"), domains, cert, key)
+	if err != nil {
+		return err
 	}
-	srv := &http.Server{Addr: listen, Handler: h, ReadHeaderTimeout: 30 * time.Second}
-	var servers []*http.Server
-	switch {
-	case len(domains) > 0:
-		m := &autocert.Manager{
-			Prompt:     autocert.AcceptTOS,
-			HostPolicy: autocert.HostWhitelist(domains...),
-			Cache:      autocert.DirCache(filepath.Join(gophper.DefaultEngineConfig().CacheDir, "autocert")),
-		}
-		srv.TLSConfig = m.TLSConfig()
-		// :80 answers the ACME challenge and redirects everything else to HTTPS.
-		servers = append(servers, &http.Server{Addr: ":80", Handler: m.HTTPHandler(nil), ReadHeaderTimeout: 30 * time.Second})
-	case cert != "":
-		pair, err := tls.LoadX509KeyPair(cert, key)
-		if err != nil {
-			return err
-		}
-		srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{pair}}
-	}
-	servers = append(servers, srv)
 
 	errs := make(chan error, len(servers))
 	for _, s := range servers {
@@ -639,6 +615,39 @@ func serveAction(ctx context.Context, cmd *cli.Command) (err error) {
 		err = errors.Join(err, s.Shutdown(shutdownCtx))
 	}
 	return err
+}
+
+// serveServers returns the servers serve runs, unstarted: h on listen,
+// with TLS from cert and key, or from Let's Encrypt for domains. That one
+// comes with a server on :80 for the ACME challenge.
+func serveServers(h http.Handler, listen string, domains []string, cert, key string) ([]*http.Server, error) {
+	switch {
+	case listen != "":
+	case len(domains) > 0:
+		listen = ":443"
+	default:
+		listen = "127.0.0.1:8080"
+	}
+	srv := &http.Server{Addr: listen, Handler: h, ReadHeaderTimeout: 30 * time.Second}
+	var servers []*http.Server
+	switch {
+	case len(domains) > 0:
+		m := &autocert.Manager{
+			Prompt:     autocert.AcceptTOS,
+			HostPolicy: autocert.HostWhitelist(domains...),
+			Cache:      autocert.DirCache(filepath.Join(gophper.DefaultEngineConfig().CacheDir, "autocert")),
+		}
+		srv.TLSConfig = m.TLSConfig()
+		// :80 answers the ACME challenge and redirects everything else to HTTPS.
+		servers = append(servers, &http.Server{Addr: ":80", Handler: m.HTTPHandler(nil), ReadHeaderTimeout: 30 * time.Second})
+	case cert != "":
+		pair, err := tls.LoadX509KeyPair(cert, key)
+		if err != nil {
+			return nil, err
+		}
+		srv.TLSConfig = &tls.Config{Certificates: []tls.Certificate{pair}}
+	}
+	return append(servers, srv), nil
 }
 
 func fcgiAction(ctx context.Context, cmd *cli.Command) (err error) {

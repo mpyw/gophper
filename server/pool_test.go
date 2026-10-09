@@ -320,3 +320,20 @@ func TestPoolConfigErrors(t *testing.T) {
 		t.Error("no temporary directory: no error")
 	}
 }
+
+// TestPoolWorkerStartTimeout gives up on a worker that does not listen in
+// time, and stops it.
+func TestPoolWorkerStartTimeout(t *testing.T) {
+	// Restored once the pool is gone: cleanups run last first.
+	old := poolWorkerStartTimeout
+	t.Cleanup(func() { poolWorkerStartTimeout = old })
+	p, vars := poolForTest(t)
+	poolWorkerStartTimeout = time.Nanosecond
+	_, err := p.run(context.Background(), vars, nil, io.Discard, io.Discard)
+	if err == nil || !strings.Contains(err.Error(), "did not listen in time") {
+		t.Errorf("err = %v", err)
+	}
+	if len(p.workers.all) != 0 {
+		t.Errorf("%d workers left", len(p.workers.all))
+	}
+}

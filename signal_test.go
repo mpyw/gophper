@@ -192,3 +192,33 @@ func TestSignalSleepInHandler(t *testing.T) {
 		t.Errorf("exit %d: %q", code, out)
 	}
 }
+
+// TestSignalTerminatesStuckRun sends SIGTERM while PHP is stuck in a Go
+// function, where it cannot act on it. After the grace period, the host
+// ends the run, which reports 128 plus the signal, as a shell does.
+func TestSignalTerminatesStuckRun(t *testing.T) {
+	ch := make(chan os.Signal, 1)
+	ready := make(chan struct{})
+	go func() {
+		<-ready
+		ch <- syscall.SIGTERM
+	}()
+	start := time.Now()
+	code, err := newTestEngine(t).RunCLI(context.Background(), gophper.Options{
+		Args: []string{"-r", `go_block();`},
+		Functions: map[string]gophper.Function{
+			"go_block": func(ctx context.Context, _ []any) (any, error) {
+				close(ready)
+				<-ctx.Done()
+				return nil, ctx.Err()
+			},
+		},
+		Signals: ch,
+	})
+	if err != nil || code != 128+15 {
+		t.Errorf("exit %d, %v", code, err)
+	}
+	if d := time.Since(start); d > 30*time.Second {
+		t.Errorf("took %s", d)
+	}
+}

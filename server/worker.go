@@ -61,8 +61,9 @@ type poolWorker struct {
 	listenBy time.Time
 }
 
-// poolWorkerStartTimeout is how long php-cgi gets to start listening.
-const poolWorkerStartTimeout = 30 * time.Second
+// poolWorkerStartTimeout is how long php-cgi gets to start listening. A
+// variable, so that tests need not wait as long.
+var poolWorkerStartTimeout = 30 * time.Second
 
 // poolServe runs one request on a worker.
 func (p *pool) poolServe(ctx context.Context, vars map[string]string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {

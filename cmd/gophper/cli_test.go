@@ -27,6 +27,8 @@ import (
 	"testing"
 	"time"
 
+	phpext "github.com/mpyw/gophper-wasm/ext"
+
 	"github.com/mpyw/gophper"
 	"github.com/mpyw/gophper/internal/fcgi"
 )
@@ -742,9 +744,17 @@ func TestCLIExtensionInstallErrors(t *testing.T) {
 	dir := t.TempDir()
 	file := filepath.Join(dir, "file")
 	cliWrite(t, file, "")
-	// A directory where gd.so would go.
+	// A directory where gd.so would go, or intl's data file beside intl.so.
 	blocked := filepath.Join(dir, "blocked")
 	if err := os.MkdirAll(filepath.Join(blocked, "gd.so"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	data := phpext.Files("intl")
+	if len(data) == 0 {
+		t.Fatal("intl has no data file")
+	}
+	intl := filepath.Join(dir, "intl")
+	if err := os.MkdirAll(filepath.Join(intl, data[0]), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	for _, tt := range []struct {
@@ -752,6 +762,7 @@ func TestCLIExtensionInstallErrors(t *testing.T) {
 	}{
 		{file, "gd"},
 		{blocked, "gd"},
+		{intl, "intl"},
 	} {
 		_, errOut, code := cliRun(t, dir, "", "--extension-dir", tt.dir, "extension", "install", tt.ext)
 		if code != 1 || errOut == "" {

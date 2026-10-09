@@ -608,3 +608,48 @@ func TestHTTPNetworkAndMemory(t *testing.T) {
 		}
 	}
 }
+
+// TestHTTPClientGoneWhileStreaming drops the connection while PHP streams.
+// The handler stops copying, and the request ends: its access log line
+// comes, with no worker held.
+func TestHTTPClientGoneWhileStreaming(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "stream.php"), []byte(`<?php
+		$chunk = str_repeat("x", 64 << 10);
+		for ($end = microtime(true) + 5; microtime(true) < $end;) { echo $chunk; flush(); }`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	logged := make(chan string, 4)
+	srv := startHTTPWith(t, func(cfg *server.HTTPConfig) {
+		cfg.Root = root
+		cfg.AccessLog = writerFunc(func(p []byte) (int, error) {
+			logged <- string(p)
+			return len(p), nil
+		})
+	})
+	conn, err := net.Dial("tcp", srv.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(conn, "GET /stream.php HTTP/1.1\r\nHost: x\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(conn, make([]byte, 128<<10)); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case line := <-logged:
+		if !strings.Contains(line, "GET /stream.php") {
+			t.Errorf("logged %q", line)
+		}
+	case <-time.After(20 * time.Second):
+		t.Fatal("the request did not end after the client left")
+	}
+	// The instance is free again.
+	if _, body := get(t, srv.URL+"/stream.php?"); len(body) == 0 {
+		t.Error("no instance for the next request")
+	}
+}
