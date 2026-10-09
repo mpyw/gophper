@@ -45,20 +45,23 @@ func dialFCGI(t testing.TB, addr string) *fcgiClient {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 	return &fcgiClient{conn: conn, r: bufio.NewReader(conn)}
 }
 
 func (c *fcgiClient) write(typ uint8, id uint16, content []byte) error {
 	var b bytes.Buffer
 	pad := -len(content) & 7
-	binary.Write(&b, binary.BigEndian, struct {
+	if err := binary.Write(&b, binary.BigEndian, struct {
 		Version, Type uint8
 		ID, Len       uint16
 		Pad, Reserved uint8
-	}{1, typ, id, uint16(len(content)), uint8(pad), 0})
-	b.Write(content)
-	b.Write(make([]byte, pad))
+	}{1, typ, id, uint16(len(content)), uint8(pad), 0}); err != nil {
+		return err
+	}
+	// Writes to a bytes.Buffer do not fail.
+	_, _ = b.Write(content)
+	_, _ = b.Write(make([]byte, pad))
 	_, err := c.conn.Write(b.Bytes())
 	return err
 }
@@ -91,11 +94,17 @@ func (c *fcgiClient) send(id uint16, keep bool, params map[string]string, body [
 		p = append(p, k...)
 		p = append(p, v...)
 	}
-	c.write(4, id, p)
-	c.write(4, id, nil)
+	if err := c.write(4, id, p); err != nil {
+		return err
+	}
+	if err := c.write(4, id, nil); err != nil {
+		return err
+	}
 	for len(body) > 0 {
 		n := min(len(body), 65535)
-		c.write(5, id, body[:n])
+		if err := c.write(5, id, body[:n]); err != nil {
+			return err
+		}
 		body = body[n:]
 	}
 	return c.write(5, id, nil)
@@ -120,9 +129,9 @@ func (c *fcgiClient) read() (*fcgiResponse, error) {
 		buf = buf[:h.Len]
 		switch h.Type {
 		case 6:
-			stdout.Write(buf)
+			_, _ = stdout.Write(buf) // a bytes.Buffer write does not fail
 		case 7:
-			stderr.Write(buf)
+			_, _ = stderr.Write(buf)
 		case 3:
 			res := &fcgiResponse{AppStatus: binary.BigEndian.Uint32(buf), Stderr: stderr.String(), Status: 200}
 			tp := textproto.NewReader(bufio.NewReader(&stdout))
@@ -181,8 +190,8 @@ func startFCGIWith(t testing.TB, configure func(*server.FastCGIConfig)) (addr, r
 	t.Cleanup(func() {
 		cancel()
 		<-done
-		srv.Close()
-		engine.Close(context.Background())
+		_ = srv.Close()
+		_ = engine.Close(context.Background())
 	})
 	return l.Addr().String(), root
 }
@@ -503,7 +512,7 @@ func TestFastCGIConfigErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer engine.Close(context.Background())
+	defer func() { _ = engine.Close(context.Background()) }()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "file")
 	if err := os.WriteFile(file, nil, 0o644); err != nil {
@@ -526,7 +535,7 @@ func TestFastCGIConfigErrors(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			srv, err := server.NewFastCGIServer(engine, tc.cfg)
 			if err == nil {
-				srv.Close()
+				_ = srv.Close()
 				t.Fatal("no error")
 			}
 			if !strings.Contains(err.Error(), tc.want) {
@@ -551,7 +560,7 @@ func TestFastCGIAllowedClientsUnix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer engine.Close(context.Background())
+	defer func() { _ = engine.Close(context.Background()) }()
 	root, err := filepath.Abs("testdata/www")
 	if err != nil {
 		t.Fatal(err)
@@ -563,13 +572,13 @@ func TestFastCGIAllowedClientsUnix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer srv.Close()
+	defer func() { _ = srv.Close() }()
 	// Short, as a Unix socket path is limited to about 100 bytes.
 	dir, err := os.MkdirTemp("", "gfcgi")
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	l, err := net.Listen("unix", filepath.Join(dir, "s"))
 	if err != nil {
 		t.Fatal(err)
@@ -588,7 +597,7 @@ func TestFastCGIAllowedClientsUnix(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	c := &fcgiClient{conn: conn, r: bufio.NewReader(conn)}
 	res, err := c.do(1, false, params(root, "GET", "/index.php", nil), nil)
 	if err != nil || res.Status != 201 {
@@ -722,7 +731,9 @@ func TestFastCGIAbort(t *testing.T) {
 	if err := c.write(2, 1, nil); err != nil {
 		t.Fatal(err)
 	}
-	c.conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if err := c.conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	res, err := c.read()
 	if err != nil {
 		t.Fatal(err)

@@ -102,8 +102,10 @@ func fcgiRawConn(t *testing.T, addr string) *serverConn {
 	if err != nil {
 		t.Fatal(err)
 	}
-	conn.SetDeadline(time.Now().Add(10 * time.Second))
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
+	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	return fcgiRawConnFrom(conn)
 }
 
@@ -125,6 +127,25 @@ func (c *serverConn) fcgiBegin(t *testing.T, id, role uint16, keep bool) {
 		b[2] = flagKeepConn
 	}
 	c.fcgiSend(t, typeBeginRequest, id, b)
+}
+
+// fcgiWriteRaw writes b as is, bypassing the record framing, and with
+// closeWrite then closes the sending side.
+func (c *serverConn) fcgiWriteRaw(t *testing.T, b []byte, closeWrite bool) {
+	t.Helper()
+	if _, err := c.conn.Write(b); err != nil {
+		t.Fatal(err)
+	}
+	if !closeWrite {
+		return
+	}
+	tc, ok := c.conn.(*net.TCPConn)
+	if !ok {
+		t.Fatalf("connection is %T, want *net.TCPConn", c.conn)
+	}
+	if err := tc.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 // fcgiResult is what a responder sent for one request.
@@ -172,7 +193,7 @@ func (c *serverConn) fcgiExpectClosed(t *testing.T) {
 	t.Helper()
 	if rec, err := c.readRecord(); err == nil {
 		t.Fatalf("got record type %d, want the connection closed", rec.h.Type)
-	} else if ne := (net.Error)(nil); errors.As(err, &ne) && ne.Timeout() {
+	} else if ne, ok := errors.AsType[net.Error](err); ok && ne.Timeout() {
 		t.Fatal("the connection stayed open")
 	}
 }
@@ -181,12 +202,13 @@ func (c *serverConn) fcgiExpectClosed(t *testing.T) {
 func fcgiEcho(_ context.Context, r *Request) int {
 	body, err := io.ReadAll(r.Stdin)
 	if err != nil {
-		io.WriteString(r.Stderr, "stdin: "+err.Error())
+		_, _ = io.WriteString(r.Stderr, "stdin: "+err.Error())
 		return 2
 	}
-	io.WriteString(r.Stdout, "Content-Type: text/plain\r\n\r\n")
-	io.WriteString(r.Stdout, r.Params["NAME"]+"|"+strconv.Itoa(len(r.Params["LONG"]))+"|"+string(body))
-	io.WriteString(r.Stderr, "logged")
+	// A failed write shows as a response the test does not expect.
+	_, _ = io.WriteString(r.Stdout, "Content-Type: text/plain\r\n\r\n")
+	_, _ = io.WriteString(r.Stdout, r.Params["NAME"]+"|"+strconv.Itoa(len(r.Params["LONG"]))+"|"+string(body))
+	_, _ = io.WriteString(r.Stderr, "logged")
 	status, _ := strconv.Atoi(r.Params["STATUS"])
 	return status
 }
@@ -304,30 +326,28 @@ func TestServeMalformed(t *testing.T) {
 		calls.Done()
 		return 0
 	})
-	for name, send := range map[string]func(c *serverConn){
-		"bad version": func(c *serverConn) {
-			c.conn.Write([]byte{2, typeBeginRequest, 0, 1, 0, 8, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0})
+	for name, send := range map[string]func(t *testing.T, c *serverConn){
+		"bad version": func(t *testing.T, c *serverConn) {
+			c.fcgiWriteRaw(t, []byte{2, typeBeginRequest, 0, 1, 0, 8, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0}, false)
 		},
-		"short FCGI_BEGIN_REQUEST": func(c *serverConn) {
+		"short FCGI_BEGIN_REQUEST": func(t *testing.T, c *serverConn) {
 			c.fcgiSend(t, typeBeginRequest, 1, []byte{0, 1})
 		},
-		"bad params": func(c *serverConn) {
+		"bad params": func(t *testing.T, c *serverConn) {
 			c.fcgiBegin(t, 1, roleResponder, true)
 			c.fcgiSend(t, typeParams, 1, []byte{0x80, 0, 0, 200, 1, 'x'})
 			c.fcgiSend(t, typeParams, 1, nil)
 		},
-		"content cut short": func(c *serverConn) {
-			c.conn.Write([]byte{1, typeParams, 0, 1, 0, 100, 0, 0, 'x'})
-			c.conn.(*net.TCPConn).CloseWrite()
+		"content cut short": func(t *testing.T, c *serverConn) {
+			c.fcgiWriteRaw(t, []byte{1, typeParams, 0, 1, 0, 100, 0, 0, 'x'}, true)
 		},
-		"header cut short": func(c *serverConn) {
-			c.conn.Write([]byte{1, typeParams, 0})
-			c.conn.(*net.TCPConn).CloseWrite()
+		"header cut short": func(t *testing.T, c *serverConn) {
+			c.fcgiWriteRaw(t, []byte{1, typeParams, 0}, true)
 		},
 	} {
 		t.Run(name, func(t *testing.T) {
 			c := fcgiRawConn(t, addr)
-			send(c)
+			send(t, c)
 			c.fcgiExpectClosed(t)
 		})
 	}
@@ -350,7 +370,7 @@ func TestServeAbortRequest(t *testing.T) {
 		close(started)
 		select {
 		case <-ctx.Done():
-			io.WriteString(r.Stdout, "aborted")
+			_, _ = io.WriteString(r.Stdout, "aborted")
 			return 9
 		case <-time.After(10 * time.Second):
 			return 0
@@ -397,7 +417,9 @@ func TestServeClientGone(t *testing.T) {
 	c.fcgiSend(t, typeParams, 1, nil)
 	c.fcgiSend(t, typeStdin, 1, []byte("part of the body"))
 	<-started
-	c.conn.Close()
+	if err := c.conn.Close(); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case r := <-got:
 		if !errors.Is(r.ctxErr, context.Canceled) || !errors.Is(r.readErr, io.ErrUnexpectedEOF) || r.writeErr == nil {
@@ -411,7 +433,7 @@ func TestServeClientGone(t *testing.T) {
 // A body the handler does not read does not hold the connection.
 func TestServeUnreadBody(t *testing.T) {
 	addr := fcgiTestServer(t, func(_ context.Context, r *Request) int {
-		io.WriteString(r.Stdout, "done")
+		_, _ = io.WriteString(r.Stdout, "done")
 		return 0
 	})
 	c := fcgiRawConn(t, addr)
@@ -459,7 +481,7 @@ func TestServeListenerErrors(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	broken := errors.New("broken listener")
 	fl := &fcgiFlakyListener{Listener: l, errs: []error{fcgiTimeoutError{}, broken}}
 	// A timeout is retried, and any other error ends Serve.

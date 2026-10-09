@@ -88,7 +88,7 @@ func NewHTTPHandler(engine *gophper.Engine, cfg HTTPConfig) (*HTTPHandler, error
 	}
 	for _, dir := range []string{root, cfg.Router} {
 		if dir != "" && !p.mounted(dir) {
-			p.close()
+			_ = p.close() // the mount error is the one to report
 			return nil, fmt.Errorf("%s is outside every mount", dir)
 		}
 	}
@@ -276,7 +276,7 @@ func (h *HTTPHandler) servePHP(w *httpRecorder, r *http.Request, route httpRoute
 		buffered, size, cleanup, err := httpBufferBody(body)
 		if err != nil {
 			status := http.StatusBadRequest
-			if errors.As(err, new(*http.MaxBytesError)) {
+			if _, ok := errors.AsType[*http.MaxBytesError](err); ok {
 				status = http.StatusRequestEntityTooLarge
 			}
 			http.Error(w, http.StatusText(status), status)
@@ -293,16 +293,17 @@ func (h *HTTPHandler) servePHP(w *httpRecorder, r *http.Request, route httpRoute
 	done := make(chan error, 1)
 	go func() {
 		_, err := h.pool.run(r.Context(), vars, body, pw, h.pool.errorLog)
-		pw.CloseWithError(err)
+		_ = pw.CloseWithError(err) // always nil
 		done <- err
 	}()
 	var runErr error
 	// PHP must never block on a full pipe, whatever happens below.
 	defer func() {
-		io.Copy(io.Discard, pr)
+		// Its only error is PHP's, which done carries.
+		_, _ = io.Copy(io.Discard, pr)
 		runErr = <-done
 		if runErr != nil && !errors.Is(runErr, errPoolBusy) && r.Context().Err() == nil {
-			fmt.Fprintf(h.pool.errorLog, "gophper: %s: %v\n", route.script, runErr)
+			writePoolLog(h.pool.errorLog, "gophper: %s: %v\n", route.script, runErr)
 		}
 	}()
 
@@ -343,7 +344,10 @@ func (h *HTTPHandler) servePHP(w *httpRecorder, r *http.Request, route httpRoute
 				return false
 			}
 			if br.Buffered() == 0 {
-				rc.Flush()
+				// The client is gone. A writer that cannot flush still writes.
+				if err := rc.Flush(); err != nil && !errors.Is(err, http.ErrNotSupported) {
+					return false
+				}
 			}
 		}
 		if err != nil {
@@ -461,8 +465,9 @@ func httpBufferBody(body io.Reader) (io.Reader, int64, func(), error) {
 		return nil, 0, nil, err
 	}
 	cleanup := func() {
-		f.Close()
-		os.Remove(f.Name())
+		// A read-only temporary file: nothing is lost if these fail.
+		_ = f.Close()
+		_ = os.Remove(f.Name())
 	}
 	rest, err := io.Copy(f, io.MultiReader(&buf, body))
 	if err == nil {

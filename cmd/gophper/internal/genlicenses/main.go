@@ -6,6 +6,7 @@ package main
 import (
 	"bytes"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -29,9 +30,15 @@ type module struct {
 
 func main() {
 	if err := run(); err != nil {
-		fmt.Fprintln(os.Stderr, "genlicenses:", err)
+		logf(os.Stderr, "genlicenses: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// logf writes a diagnostic. A failed write to stderr has nowhere to be
+// reported, so its error is dropped here.
+func logf(w io.Writer, format string, args ...any) {
+	_, _ = fmt.Fprintf(w, format, args...)
 }
 
 func run() error {
@@ -103,8 +110,9 @@ func appendLicenses(buf *bytes.Buffer, heading, dir string) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(buf, "---- %s: %s ----\n\n%s\n", heading, e.Name(), bytes.TrimRight(b, "\n"))
-		buf.WriteString("\n")
+		if _, err := fmt.Fprintf(buf, "---- %s: %s ----\n\n%s\n\n", heading, e.Name(), bytes.TrimRight(b, "\n")); err != nil {
+			return err
+		}
 		found = true
 	}
 	if !found {

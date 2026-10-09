@@ -84,36 +84,43 @@ func (s *FastCGIServer) handle(ctx context.Context, r *fcgi.Request) int {
 	}
 	switch {
 	case s.cfg.PingPath != "" && (uri == s.cfg.PingPath || r.Params["SCRIPT_NAME"] == s.cfg.PingPath):
-		fmt.Fprint(out, "Content-Type: text/plain\r\n\r\npong\n")
+		// A failed write means the web server is gone: report the request as failed.
+		if _, err := fmt.Fprint(out, "Content-Type: text/plain\r\n\r\npong\n"); err != nil {
+			return 1
+		}
 		return 0
 	case s.cfg.StatusPath != "" && (uri == s.cfg.StatusPath || r.Params["SCRIPT_NAME"] == s.cfg.StatusPath):
 		st := s.pool.stats()
-		fmt.Fprintf(out, "Content-Type: text/plain\r\n\r\nstart time: %s\nstart since: %d\naccepted requests: %d\nactive processes: %d\nmax active processes: %d\n",
-			st.started.Format(time.RFC1123Z), int(time.Since(st.started).Seconds()), st.accepted, st.active, st.maxActive)
+		if _, err := fmt.Fprintf(out, "Content-Type: text/plain\r\n\r\nstart time: %s\nstart since: %d\naccepted requests: %d\nactive processes: %d\nmax active processes: %d\n",
+			st.started.Format(time.RFC1123Z), int(time.Since(st.started).Seconds()), st.accepted, st.active, st.maxActive); err != nil {
+			return 1
+		}
 		return 0
 	}
 
 	script := r.Params["SCRIPT_FILENAME"]
 	if !slices.Contains(s.cfg.LimitExtensions, filepath.Ext(script)) {
-		fmt.Fprintf(r.Stderr, "gophper: access to the script %q has been denied (see LimitExtensions)\n", script)
-		fmt.Fprint(out, "Status: 403 Forbidden\r\nContent-Type: text/plain\r\n\r\nAccess denied.\n")
+		writePoolLog(r.Stderr, "gophper: access to the script %q has been denied (see LimitExtensions)\n", script)
+		// The request fails either way, so a failed write changes nothing.
+		_, _ = fmt.Fprint(out, "Status: 403 Forbidden\r\nContent-Type: text/plain\r\n\r\nAccess denied.\n")
 		return 1
 	}
 	if !s.pool.mounted(script) {
-		fmt.Fprintf(r.Stderr, "gophper: %q is outside every mount\n", script)
-		fmt.Fprint(out, "Status: 404 Not Found\r\nContent-Type: text/plain\r\n\r\nFile not found.\n")
+		writePoolLog(r.Stderr, "gophper: %q is outside every mount\n", script)
+		_, _ = fmt.Fprint(out, "Status: 404 Not Found\r\nContent-Type: text/plain\r\n\r\nFile not found.\n")
 		return 1
 	}
 
 	code, err := s.pool.run(ctx, r.Params, r.Stdin, out, r.Stderr)
 	if err != nil {
-		fmt.Fprintf(r.Stderr, "gophper: %s: %v\n", script, err)
+		writePoolLog(r.Stderr, "gophper: %s: %v\n", script, err)
 		if out.n == 0 {
 			status := "500 Internal Server Error"
 			if errors.Is(err, errPoolBusy) {
 				status = "503 Service Unavailable"
 			}
-			fmt.Fprintf(out, "Status: %s\r\nContent-Type: text/plain\r\n\r\n%s\n", status, status)
+			// code is set to non-zero below, so a failed write changes nothing.
+			_, _ = fmt.Fprintf(out, "Status: %s\r\nContent-Type: text/plain\r\n\r\n%s\n", status, status)
 		}
 		if code == 0 {
 			code = 1
@@ -174,7 +181,7 @@ func (l *fastcgiListener) Accept() (net.Conn, error) {
 		if slices.ContainsFunc(l.allowed, func(p netip.Prefix) bool { return p.Contains(addr) }) {
 			return conn, nil
 		}
-		fmt.Fprintf(l.errorLog, "gophper: connection from %s is not allowed\n", addr)
-		conn.Close()
+		writePoolLog(l.errorLog, "gophper: connection from %s is not allowed\n", addr)
+		_ = conn.Close() // refused before any byte was read
 	}
 }

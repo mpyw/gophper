@@ -170,7 +170,7 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 	files["php.ini"] = strings.Join(slices.Concat(poolINI, opcacheINI, cfg.INI), "\n") + "\n"
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(iniDir, name), []byte(content), 0o644); err != nil {
-			os.RemoveAll(iniDir)
+			_ = os.RemoveAll(iniDir) // the write error is the one to report
 			return nil, err
 		}
 	}
@@ -213,7 +213,7 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 		// Only this user may reach the workers' sockets.
 		dir, err := os.MkdirTemp("", "gophper-w")
 		if err != nil {
-			os.RemoveAll(iniDir)
+			_ = os.RemoveAll(iniDir) // the MkdirTemp error is the one to report
 			return nil, err
 		}
 		maxRequests := cfg.MaxRequests
@@ -318,15 +318,24 @@ func (p *pool) logAccess(remote, method, uri, proto string, status int, size int
 	if remote == "" {
 		remote = "-"
 	}
-	fmt.Fprintf(p.accessLog, "%s - - [%s] %q %d %d %.3fs\n",
+	writePoolLog(p.accessLog, "%s - - [%s] %q %d %d %.3fs\n",
 		remote, start.Format("02/Jan/2006:15:04:05 -0700"), method+" "+uri+" "+proto, status, size, time.Since(start).Seconds())
+}
+
+// writePoolLog writes one line to an error log, an access log or FCGI_STDERR.
+// A failed write to a log has nowhere to be reported, so its error is dropped.
+//
+//declscope:shared // fastcgi.go, http.go and worker.go
+func writePoolLog(w io.Writer, format string, args ...any) {
+	_, _ = fmt.Fprintf(w, format, args...)
 }
 
 //declscope:shared // http.go and fastcgi.go
 func (p *pool) close() error {
+	var err error
 	if p.workers != nil {
 		p.poolStopWorkers()
-		os.RemoveAll(p.workers.dir)
+		err = os.RemoveAll(p.workers.dir)
 	}
-	return os.RemoveAll(p.iniDir)
+	return errors.Join(err, os.RemoveAll(p.iniDir))
 }

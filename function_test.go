@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -27,7 +28,12 @@ func TestFunctions(t *testing.T) {
 		FS:     wazero.NewFSConfig(),
 		Functions: map[string]gophper.Function{
 			"go_add": func(_ context.Context, args []any) (any, error) {
-				return args[0].(int64) + args[1].(int64), nil
+				a, aok := args[0].(int64)
+				b, bok := args[1].(int64)
+				if !aok || !bok {
+					return nil, fmt.Errorf("go_add got %T, %T", args[0], args[1])
+				}
+				return a + b, nil
 			},
 			"go_echo": func(_ context.Context, args []any) (any, error) { return args, nil },
 			"go_fail": func(context.Context, []any) (any, error) { return nil, errors.New("from Go") },

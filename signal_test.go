@@ -6,7 +6,6 @@ import (
 	"bytes"
 	"context"
 	"os"
-	"runtime"
 	"strings"
 	"syscall"
 	"testing"
@@ -68,9 +67,6 @@ func runSignalsEvery(t *testing.T, code string, sig os.Signal, every time.Durati
 }
 
 func TestSignal(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("needs Unix signals")
-	}
 	t.Run("handler", func(t *testing.T) {
 		out, exit := runSignals(t, `
 			pcntl_async_signals(true);

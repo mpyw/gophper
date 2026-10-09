@@ -41,8 +41,7 @@ func (x dnsExports) lookup(ctx context.Context, m api.Module, namePtr, nameLen u
 	defer cancel()
 	ips, err := net.DefaultResolver.LookupIP(lctx, network, string(name))
 	if err != nil {
-		var dnsErr *net.DNSError
-		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+		if dnsErr, ok := errors.AsType[*net.DNSError](err); ok && dnsErr.IsNotFound {
 			return -1
 		}
 		return -2

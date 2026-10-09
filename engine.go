@@ -173,9 +173,11 @@ func engineBinary(cacheDir string, bin func() ([]byte, error), digest string) ([
 		if f, err := os.CreateTemp(filepath.Dir(path), ".wasm-*"); err == nil {
 			_, werr := f.Write(b)
 			if cerr := f.Close(); werr == nil && cerr == nil {
-				os.Rename(f.Name(), path)
+				// A failed rename leaves no cache, as a failed write does.
+				_ = os.Rename(f.Name(), path)
 			}
-			os.Remove(f.Name())
+			// Gone after a successful rename; otherwise only a stray file.
+			_ = os.Remove(f.Name())
 		}
 	}
 	return b, nil
@@ -202,7 +204,7 @@ func (e *Engine) RunCGI(ctx context.Context, opts Options) (int, error) {
 	return e.run(ctx, e.cgiModule, "php-cgi", opts)
 }
 
-func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule, error), argv0 string, opts Options) (int, error) {
+func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule, error), argv0 string, opts Options) (code int, err error) {
 	mod, err := compiled()
 	if err != nil {
 		return 0, err
@@ -218,7 +220,7 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 	defer inst.sockets.Close()
 	defer inst.processes.Close()
 	defer inst.system.Close()
-	defer inst.linker.Close(context.WithoutCancel(ctx))
+	defer func() { err = errors.Join(err, inst.linker.Close(context.WithoutCancel(ctx))) }()
 
 	fs := opts.FS
 	if fs == nil {
@@ -273,7 +275,7 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 	if err != nil {
 		return 0, err
 	}
-	defer m.Close(context.WithoutCancel(ctx))
+	defer func() { err = errors.Join(err, m.Close(context.WithoutCancel(ctx))) }()
 	if err := inst.vm.Locate(m); err != nil {
 		return 0, err
 	}
@@ -291,8 +293,7 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 	}
 
 	_, err = m.ExportedFunction("_start").Call(context.WithValue(ctx, engineInstanceKey{}, inst))
-	code := 0
-	if exitErr := (*sys.ExitError)(nil); errors.As(err, &exitErr) {
+	if exitErr, ok := errors.AsType[*sys.ExitError](err); ok {
 		code, err = int(exitErr.ExitCode()), nil
 	}
 	if terminated := inst.signals.Terminated(); terminated != 0 {

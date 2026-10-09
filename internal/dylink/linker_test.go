@@ -164,7 +164,7 @@ func linkerSetup(t *testing.T, tableMax uint32) (context.Context, api.Module, *L
 	ctx := context.Background()
 	r := wazero.NewRuntimeWithConfig(ctx, wazero.NewRuntimeConfig().
 		WithCoreFeatures(api.CoreFeaturesV2|experimental.CoreFeaturesExceptionHandling|experimental.CoreFeaturesExtendedConst))
-	t.Cleanup(func() { r.Close(ctx) })
+	t.Cleanup(func() { _ = r.Close(ctx) })
 	bin := linkerMainModule(tableMax)
 	main, err := r.InstantiateWithConfig(ctx, bin, wazero.NewModuleConfig().WithName("main"))
 	if err != nil {
@@ -175,7 +175,7 @@ func linkerSetup(t *testing.T, tableMax uint32) (context.Context, api.Module, *L
 		t.Fatal(err)
 	}
 	l := NewLinker(cache)
-	t.Cleanup(func() { l.Close(ctx) })
+	t.Cleanup(func() { _ = l.Close(ctx) })
 	return ctx, main, l
 }
 

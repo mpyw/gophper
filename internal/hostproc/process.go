@@ -193,7 +193,7 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 			if err != nil {
 				return errnoFrom(err)
 			}
-			release = append(release, func() { of.Close() })
+			release = append(release, func() { _ = of.Close() }) // Only our copy; its error changes nothing.
 			f = of
 		default:
 			return wasi.EINVAL
@@ -230,7 +230,9 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 	p.children[pid] = c
 	p.mu.Unlock()
 	go func() {
-		cmd.Wait()
+		// The exit status is read from cmd.ProcessState below; the error
+		// adds nothing the guest can see.
+		_ = cmd.Wait()
 		p.mu.Lock()
 		defer p.mu.Unlock()
 		c.done = true

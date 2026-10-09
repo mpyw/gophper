@@ -16,6 +16,6 @@ func newTestEngine(t *testing.T) *gophper.Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { e.Close(context.Background()) })
+	t.Cleanup(func() { _ = e.Close(context.Background()) })
 	return e
 }

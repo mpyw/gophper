@@ -231,7 +231,9 @@ func (t *Sockets) acceptLoop(e *socketEntry, ln net.Listener) {
 				e.acceptErr = err
 			}
 		} else if e.closed {
-			conn.Close()
+			// Nobody will accept it. The peer sees the close, and there is
+			// nobody to tell about a failure.
+			_ = conn.Close()
 		} else {
 			e.pending = append(e.pending, conn)
 		}
@@ -247,16 +249,20 @@ func (t *Sockets) acceptLoop(e *socketEntry, ln net.Listener) {
 // attach makes conn the socket's stream connection. t.mu must be held.
 func (t *Sockets) attach(e *socketEntry, conn net.Conn) {
 	if e.closed {
-		conn.Close()
+		// The guest closed the socket already, so nobody can see a failure.
+		_ = conn.Close()
 		return
 	}
 	e.conn = conn
 	e.reading = true
 	if tc, ok := conn.(*net.TCPConn); ok {
 		// Native sockets start with Nagle on. Go turns it off by default.
-		tc.SetNoDelay(e.nodelay)
+		// The connect or accept itself succeeded, and a non-blocking connect
+		// has nobody to report to, so a failure here is ignored. It means the
+		// socket is broken, which its next read or write reports.
+		_ = tc.SetNoDelay(e.nodelay)
 		if e.keepalive {
-			tc.SetKeepAlive(true)
+			_ = tc.SetKeepAlive(true)
 		}
 	}
 	go t.readStream(e, conn)
@@ -317,19 +323,22 @@ func (e *socketEntry) network() string {
 	return "unixgram"
 }
 
+// close releases the host resources. Their Close errors are ignored: like
+// close(2) on a socket, they report nothing the guest can act on, and the fd
+// is gone either way.
 func (e *socketEntry) close() {
 	e.closed = true
 	if e.conn != nil {
-		e.conn.Close()
+		_ = e.conn.Close()
 	}
 	if e.listener != nil {
-		e.listener.Close()
+		_ = e.listener.Close()
 	}
 	if e.packet != nil {
-		e.packet.Close()
+		_ = e.packet.Close()
 	}
 	for _, c := range e.pending {
-		c.Close()
+		_ = c.Close()
 	}
 	e.pending = nil
 }
@@ -770,11 +779,15 @@ func (x socketExports) shutdown(ctx context.Context, fd, how int32) int32 {
 		return 0
 	}
 	if how&1 != 0 {
-		half.CloseRead()
+		if err := half.CloseRead(); err != nil {
+			return errnoFrom(err)
+		}
 	}
 	if how&2 != 0 {
+		if err := half.CloseWrite(); err != nil {
+			return errnoFrom(err)
+		}
 		e.shutWrite = true
-		half.CloseWrite()
 	}
 	t.notify()
 	return 0
@@ -854,34 +867,44 @@ func (x socketExports) setopt(ctx context.Context, fd, opt, value int32) int32 {
 	if e == nil {
 		return wasi.EBADF
 	}
+	// On a connected socket, the host's option is set first. If that fails,
+	// the option keeps its old value, as with setsockopt(2).
 	tc, _ := e.conn.(*net.TCPConn)
 	on := value != 0
 	switch opt {
 	case socketOptNodelay:
+		if tc != nil {
+			if err := tc.SetNoDelay(on); err != nil {
+				return errnoFrom(err)
+			}
+		}
 		e.nodelay = on
-		if tc != nil {
-			tc.SetNoDelay(on)
-		}
 	case socketOptKeepalive:
-		e.keepalive = on
 		if tc != nil {
-			tc.SetKeepAlive(on)
+			if err := tc.SetKeepAlive(on); err != nil {
+				return errnoFrom(err)
+			}
 		}
+		e.keepalive = on
 	case socketOptReuseaddr:
 		// Go listeners set SO_REUSEADDR already.
 		e.reuseaddr = on
 	case socketOptBroadcast:
 		e.broadcast = on
 	case socketOptRcvbuf:
+		if tc != nil {
+			if err := tc.SetReadBuffer(int(value)); err != nil {
+				return errnoFrom(err)
+			}
+		}
 		e.rcvbuf = value
-		if tc != nil {
-			tc.SetReadBuffer(int(value))
-		}
 	case socketOptSndbuf:
-		e.sndbuf = value
 		if tc != nil {
-			tc.SetWriteBuffer(int(value))
+			if err := tc.SetWriteBuffer(int(value)); err != nil {
+				return errnoFrom(err)
+			}
 		}
+		e.sndbuf = value
 	default:
 		return wasi.EINVAL
 	}

@@ -48,7 +48,7 @@ func echoServer(t *testing.T, network, addr string) net.Listener {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { l.Close() })
+	t.Cleanup(func() { _ = l.Close() })
 	go func() {
 		for {
 			c, err := l.Accept()
@@ -56,14 +56,14 @@ func echoServer(t *testing.T, network, addr string) net.Listener {
 				return
 			}
 			go func() {
-				defer c.Close()
+				defer func() { _ = c.Close() }()
 				r := bufio.NewReader(c)
 				for {
 					line, err := r.ReadString('\n')
 					if err != nil {
 						return
 					}
-					fmt.Fprintf(c, "echo: %s", line)
+					_, _ = fmt.Fprintf(c, "echo: %s", line)
 				}
 			}()
 		}
@@ -73,6 +73,10 @@ func echoServer(t *testing.T, network, addr string) net.Listener {
 
 func TestSocketTCP(t *testing.T) {
 	l := echoServer(t, "tcp", "127.0.0.1:0")
+	addr, ok := l.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("listener address: %T", l.Addr())
+	}
 	out, code := runPHP(t, fmt.Sprintf(`
 		$fp = fsockopen("127.0.0.1", %d, $errno, $errstr, 5) or die("$errno $errstr");
 		fwrite($fp, "hello\n");
@@ -82,7 +86,7 @@ func TestSocketTCP(t *testing.T) {
 		$name = stream_socket_get_name($fp, true);
 		echo $name === "127.0.0.1:%[1]d" ? "peer ok" : "peer $name", "\n";
 		fclose($fp);
-	`, l.Addr().(*net.TCPAddr).Port))
+	`, addr.Port))
 	if code != 0 || out != "echo: hello\n300007\npeer ok\n" {
 		t.Errorf("exit %d\n%s", code, out)
 	}
@@ -91,7 +95,7 @@ func TestSocketTCP(t *testing.T) {
 func TestSocketHTTPWrapper(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Test", "yes")
-		fmt.Fprintf(w, "%s %s", r.Method, r.URL.Path)
+		_, _ = fmt.Fprintf(w, "%s %s", r.Method, r.URL.Path)
 	}))
 	defer srv.Close()
 	out, code := runPHP(t, fmt.Sprintf(`
@@ -105,13 +109,17 @@ func TestSocketHTTPWrapper(t *testing.T) {
 
 func TestSocketDNS(t *testing.T) {
 	l := echoServer(t, "tcp", "127.0.0.1:0")
+	addr, ok := l.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("listener address: %T", l.Addr())
+	}
 	out, code := runPHP(t, fmt.Sprintf(`
 		echo gethostbyname("localhost"), "\n";
 		$fp = stream_socket_client("tcp://localhost:%d", $errno, $errstr, 5) or die("$errno $errstr");
 		fwrite($fp, "by name\n");
 		echo fgets($fp);
 		echo gethostbyname("no-such-host.invalid"), "\n";
-	`, l.Addr().(*net.TCPAddr).Port))
+	`, addr.Port))
 	if code != 0 || out != "127.0.0.1\necho: by name\nno-such-host.invalid\n" {
 		t.Errorf("exit %d\n%s", code, out)
 	}
@@ -122,8 +130,12 @@ func TestSocketRefused(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	port := l.Addr().(*net.TCPAddr).Port
-	l.Close()
+	addr, ok := l.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("listener address: %T", l.Addr())
+	}
+	port := addr.Port
+	_ = l.Close()
 	out, _ := runPHP(t, fmt.Sprintf(`
 		$fp = @fsockopen("127.0.0.1", %d, $errno, $errstr, 5);
 		var_dump($fp, $errstr);
@@ -172,7 +184,7 @@ func TestSocketUnix(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	path := filepath.Join(dir, "echo.sock")
 	echoServer(t, "unix", path)
 	out, code := runPHP(t, fmt.Sprintf(`
@@ -190,7 +202,7 @@ func TestSocketUDP(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer pc.Close()
+	defer func() { _ = pc.Close() }()
 	go func() {
 		buf := make([]byte, 1500)
 		for {
@@ -198,7 +210,10 @@ func TestSocketUDP(t *testing.T) {
 			if err != nil {
 				return
 			}
-			pc.WriteTo(append([]byte("echo: "), buf[:n]...), from)
+			if _, err := pc.WriteTo(append([]byte("echo: "), buf[:n]...), from); err != nil {
+				t.Error(err)
+				return
+			}
 		}
 	}()
 	out, code := runPHP(t, fmt.Sprintf(`
@@ -218,19 +233,23 @@ func TestSocketCancelWhileReading(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
+	addr, ok := l.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("listener address: %T", l.Addr())
+	}
 	go func() {
 		c, err := l.Accept()
 		if err == nil {
 			time.Sleep(5 * time.Second)
-			c.Close()
+			_ = c.Close()
 		}
 	}()
 	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
 	defer cancel()
 	start := time.Now()
 	_, err = newTestEngine(t).RunCLI(ctx, gophper.Options{
-		Args: []string{"-r", fmt.Sprintf(`$fp = fsockopen("127.0.0.1", %d); fgets($fp);`, l.Addr().(*net.TCPAddr).Port)},
+		Args: []string{"-r", fmt.Sprintf(`$fp = fsockopen("127.0.0.1", %d); fgets($fp);`, addr.Port)},
 		FS:   wazero.NewFSConfig().WithDirMount("/", "/"),
 	})
 	if !errors.Is(err, context.DeadlineExceeded) {
@@ -358,7 +377,7 @@ func TestSocketUnixDatagramInPHP(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	out, code := runPHP(t, fmt.Sprintf(`
 		$server = stream_socket_server("udg://%[1]s", $errno, $errstr, STREAM_SERVER_BIND) or die("$errno $errstr");
 		$client = stream_socket_client("udg://%[1]s", $errno, $errstr) or die("$errno $errstr");
@@ -379,7 +398,7 @@ func TestSocketAsyncConnect(t *testing.T) {
 		t.Fatal(err)
 	}
 	closedAddr := closed.Addr().String()
-	closed.Close()
+	_ = closed.Close()
 	out, code := runPHP(t, fmt.Sprintf(`
 		$flags = STREAM_CLIENT_CONNECT | STREAM_CLIENT_ASYNC_CONNECT;
 		$fp = stream_socket_client("tcp://%s", $errno, $errstr, 5, $flags) or die("$errno $errstr");

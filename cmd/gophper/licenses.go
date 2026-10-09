@@ -27,7 +27,9 @@ var licensesModules string
 // licensesAction prints what a distributor of gophper must pass on.
 func licensesAction(_ context.Context, cmd *cli.Command) error {
 	w := cmd.Root().Writer
-	fmt.Fprintf(w, "gophper\n\n%s\n", gophper.License)
+	if _, err := fmt.Fprintf(w, "gophper\n\n%s\n", gophper.License); err != nil {
+		return err
+	}
 	entries, err := fs.ReadDir(phpwasm.Licenses, ".")
 	if err != nil {
 		return err
@@ -37,9 +39,10 @@ func licensesAction(_ context.Context, cmd *cli.Command) error {
 		if err != nil {
 			return err
 		}
-		fmt.Fprintf(w, "\n---- %s ----\n\n%s\n", strings.TrimSuffix(e.Name(), ".txt"), b)
+		if _, err := fmt.Fprintf(w, "\n---- %s ----\n\n%s\n", strings.TrimSuffix(e.Name(), ".txt"), b); err != nil {
+			return err
+		}
 	}
-	fmt.Fprintln(w)
-	_, err = io.WriteString(w, licensesModules)
+	_, err = io.WriteString(w, "\n"+licensesModules)
 	return err
 }

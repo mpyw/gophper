@@ -16,7 +16,7 @@ func newGuest(t *testing.T) api.Module {
 	t.Helper()
 	ctx := context.Background()
 	r := wazero.NewRuntime(ctx)
-	t.Cleanup(func() { r.Close(ctx) })
+	t.Cleanup(func() { _ = r.Close(ctx) })
 	// A module that defines only a memory of one page.
 	m, err := r.Instantiate(ctx, []byte("\x00asm\x01\x00\x00\x00\x05\x03\x01\x00\x01"))
 	if err != nil {

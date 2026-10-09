@@ -69,7 +69,8 @@ type Handler func(ctx context.Context, r *Request) int
 func Serve(ctx context.Context, l net.Listener, h Handler) error {
 	go func() {
 		<-ctx.Done()
-		l.Close()
+		// Only wakes Accept. Its error is the one Serve sees.
+		_ = l.Close()
 	}()
 	var wg sync.WaitGroup
 	defer wg.Wait()
@@ -79,8 +80,7 @@ func Serve(ctx context.Context, l net.Listener, h Handler) error {
 			if ctx.Err() != nil {
 				return nil
 			}
-			var ne net.Error
-			if errors.As(err, &ne) && ne.Timeout() {
+			if ne, ok := errors.AsType[net.Error](err); ok && ne.Timeout() {
 				continue
 			}
 			return err
@@ -189,14 +189,15 @@ type activeRequest struct {
 }
 
 func (c *serverConn) serve(ctx context.Context, h Handler) {
-	defer c.conn.Close()
+	// handle may have closed conn already.
+	defer func() { _ = c.conn.Close() }()
 
 	var cur *activeRequest
 	defer func() {
 		// A request whose params are still arriving has no handler yet.
 		if cur != nil && cur.started {
 			cur.cancel()
-			cur.stdin.CloseWithError(io.ErrUnexpectedEOF)
+			_ = cur.stdin.CloseWithError(io.ErrUnexpectedEOF) // always nil
 			<-cur.done
 		}
 	}()
@@ -226,7 +227,7 @@ func (c *serverConn) serve(ctx context.Context, h Handler) {
 				// FCGI_END_REQUEST, which may be before handle closed done.
 				// handle holds mu until then.
 				c.mu.Lock()
-				c.mu.Unlock()
+				c.mu.Unlock() //nolint:staticcheck // A barrier: it waits for handle to release mu.
 			}
 			select {
 			case <-cur.done:
@@ -239,12 +240,14 @@ func (c *serverConn) serve(ctx context.Context, h Handler) {
 			}
 		}
 
+		// A failed write means the web server is gone: returning closes conn.
 		switch rec.h.Type {
 		case typeGetValues:
-			c.writeRecord(typeGetValuesResult, 0, encodePairs(map[string]string{
+			if c.writeRecord(typeGetValuesResult, 0, encodePairs(map[string]string{
 				"FCGI_MPXS_CONNS": "0",
-			}))
-			c.flush()
+			})) != nil || c.flush() != nil {
+				return
+			}
 			continue
 		case typeBeginRequest:
 			if len(rec.content) < 3 {
@@ -252,11 +255,15 @@ func (c *serverConn) serve(ctx context.Context, h Handler) {
 			}
 			role := binary.BigEndian.Uint16(rec.content)
 			if cur != nil {
-				c.endRequest(rec.h.ID, 0, protocolStatusCantMpxConn, nil)
+				if c.endRequest(rec.h.ID, 0, protocolStatusCantMpxConn, nil) != nil {
+					return
+				}
 				continue
 			}
 			if role != roleResponder {
-				c.endRequest(rec.h.ID, 0, protocolStatusUnknownRole, nil)
+				if c.endRequest(rec.h.ID, 0, protocolStatusUnknownRole, nil) != nil {
+					return
+				}
 				continue
 			}
 			cur = &activeRequest{id: rec.h.ID, keepConn: rec.content[2]&flagKeepConn != 0, done: make(chan struct{})}
@@ -265,8 +272,9 @@ func (c *serverConn) serve(ctx context.Context, h Handler) {
 
 		if rec.h.ID == 0 {
 			// Unknown management record.
-			c.writeRecord(typeUnknownType, 0, []byte{rec.h.Type, 0, 0, 0, 0, 0, 0, 0})
-			c.flush()
+			if c.writeRecord(typeUnknownType, 0, []byte{rec.h.Type, 0, 0, 0, 0, 0, 0, 0}) != nil || c.flush() != nil {
+				return
+			}
 			continue
 		}
 		if cur == nil || rec.h.ID != cur.id {
@@ -297,11 +305,11 @@ func (c *serverConn) serve(ctx context.Context, h Handler) {
 				continue
 			}
 			if len(rec.content) == 0 {
-				cur.stdin.Close()
+				_ = cur.stdin.Close() // always nil
 				continue
 			}
 			// Fails once the handler stopped reading. The body is then discarded.
-			cur.stdin.Write(rec.content)
+			_, _ = cur.stdin.Write(rec.content)
 		case typeAbortRequest:
 			if cur.cancel != nil {
 				cur.cancel()
@@ -316,13 +324,22 @@ func (c *serverConn) handle(ctx context.Context, h Handler, a *activeRequest, re
 	status := h(ctx, req)
 	a.cancel()
 	// Unblock the reader if the script did not consume the whole body.
-	stdin.CloseWithError(errors.New("fcgi: request finished"))
+	_ = stdin.CloseWithError(errors.New("fcgi: request finished")) // always nil
 
-	c.writeRecord(typeStdout, a.id, nil)
-	c.writeRecord(typeStderr, a.id, nil)
-	if err := c.endRequest(a.id, uint32(status), protocolStatusRequestComplete, a.done); err != nil || !a.keepConn {
+	err := c.writeRecord(typeStdout, a.id, nil)
+	if err == nil {
+		err = c.writeRecord(typeStderr, a.id, nil)
+	}
+	if err == nil {
+		err = c.endRequest(a.id, uint32(status), protocolStatusRequestComplete, a.done)
+	} else {
+		// No FCGI_END_REQUEST was sent, so no next request can race the reader.
+		close(a.done)
+	}
+	if err != nil || !a.keepConn {
 		// Wake the reader loop, which may be blocked waiting for a record.
-		c.conn.Close()
+		// serve closes conn again; the second error means nothing.
+		_ = c.conn.Close()
 	}
 }
 

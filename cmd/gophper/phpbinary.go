@@ -56,7 +56,9 @@ func phpBinaryScript(cacheDir string, args []string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer os.Remove(tmp.Name())
+	// After the rename the name is gone, and a failed removal leaves only
+	// a stray temporary file.
+	defer func() { _ = os.Remove(tmp.Name()) }()
 	if _, err := tmp.WriteString(script); err != nil {
 		return "", errors.Join(err, tmp.Close())
 	}

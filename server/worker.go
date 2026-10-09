@@ -71,7 +71,7 @@ func (p *pool) poolServe(ctx context.Context, vars map[string]string, stdin io.R
 			return 0, fmt.Errorf("worker: %w", err)
 		}
 		code, err := fcgi.Do(ctx, conn, vars, stdin, stdout, stderr)
-		conn.Close()
+		_ = conn.Close() // Do is done with it, and its result is all that matters
 		if err != nil {
 			p.poolStop(w)
 			return code, err
@@ -95,7 +95,7 @@ func (p *pool) poolTake() (*poolWorker, error) {
 		select {
 		case <-w.done:
 			delete(ws.all, w)
-			os.Remove(w.sock)
+			_ = os.Remove(w.sock) // php-cgi may have removed it
 			continue
 		default:
 		}
@@ -120,7 +120,7 @@ func (p *pool) poolStart(sock string) (*poolWorker, error) {
 			HostPath: p.hostPath, Processes: p.processes,
 		})
 		if err != nil && ctx.Err() == nil {
-			fmt.Fprintf(p.errorLog, "gophper: worker: %v\n", err)
+			writePoolLog(p.errorLog, "gophper: worker: %v\n", err)
 		}
 	}()
 	p.workers.mu.Lock()
@@ -165,7 +165,7 @@ func (p *pool) poolStop(w *poolWorker) {
 	p.workers.mu.Unlock()
 	go func() {
 		<-w.done
-		os.Remove(w.sock)
+		_ = os.Remove(w.sock) // php-cgi may have removed it, or never made it
 	}()
 }
 

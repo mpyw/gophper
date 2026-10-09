@@ -41,8 +41,10 @@ func (x systemLockExports) lock(ctx context.Context, m api.Module, fd int32, pat
 	s.mu.Unlock()
 	if op&systemLockUnlock != 0 {
 		if f != nil {
-			systemLockFile(f, systemLockUnlock)
-			f.Close()
+			// Closing the file releases the lock too, so neither error
+			// changes anything for the guest.
+			_ = systemLockFile(f, systemLockUnlock)
+			_ = f.Close()
 			s.mu.Lock()
 			delete(s.locks, fd)
 			s.mu.Unlock()
@@ -76,7 +78,7 @@ func (x systemLockExports) lock(ctx context.Context, m api.Module, fd int32, pat
 			keep()
 			return 0
 		case !errors.Is(err, errSystemLockBusy):
-			f.Close()
+			_ = f.Close() // The lock error wins.
 			return wasi.EIO
 		case op&systemLockNonblock != 0:
 			keep()
@@ -102,7 +104,7 @@ func (x systemLockExports) unlock(ctx context.Context, fd int32) int32 {
 	delete(s.locks, fd)
 	s.mu.Unlock()
 	if f != nil {
-		f.Close()
+		_ = f.Close() // Closing releases the lock; its error changes nothing.
 	}
 	return 0
 }

@@ -48,7 +48,7 @@ func newExtensionEngine(t *testing.T) *gophper.Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { e.Close(context.Background()) })
+	t.Cleanup(func() { _ = e.Close(context.Background()) })
 	return e
 }
 
@@ -113,7 +113,7 @@ func TestExtensionNotSharedLibrary(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer e.Close(context.Background())
+	defer func() { _ = e.Close(context.Background()) }()
 	out, _ := runExtension(t, e, "-d", "extension=plain", "-r", `echo "still runs\n";`)
 	if !strings.Contains(out, "not a shared library") || !strings.Contains(out, "still runs") {
 		t.Errorf("got\n%s", out)
@@ -151,7 +151,11 @@ func TestExtensionRedis(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { l.Close() })
+	t.Cleanup(func() { _ = l.Close() })
+	addr, ok := l.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("listener address: %T", l.Addr())
+	}
 	// Shared by every connection, as in a real server.
 	var data sync.Map
 	go func() {
@@ -166,13 +170,13 @@ func TestExtensionRedis(t *testing.T) {
 	out, code := runExtension(t, newExtensionEngine(t), "-d", "extension=redis", "-r", fmt.Sprintf(`
 		$r = new Redis();
 		$r->connect("127.0.0.1", %d);
-		var_dump($r->ping(), $r->set("k", "v"), $r->get("k"), $r->get("missing"));`, l.Addr().(*net.TCPAddr).Port))
+		var_dump($r->ping(), $r->set("k", "v"), $r->get("k"), $r->get("missing"));`, addr.Port))
 	if want := "bool(true)\nbool(true)\nstring(1) \"v\"\nbool(false)\n"; code != 0 || out != want {
 		t.Errorf("exit %d\n%s", code, out)
 	}
 
 	// session.save_handler=redis: one run writes the session, the next reads it.
-	save := fmt.Sprintf("tcp://127.0.0.1:%d", l.Addr().(*net.TCPAddr).Port)
+	save := fmt.Sprintf("tcp://127.0.0.1:%d", addr.Port)
 	session := []string{"-d", "extension=redis", "-d", "session.save_handler=redis", "-d", "session.save_path=" + save,
 		"-d", "session.use_cookies=0", "-d", "session.use_strict_mode=0"}
 	_, code = runExtension(t, newExtensionEngine(t), append(session, "-r", `session_id("abc"); session_start(); $_SESSION["n"] = 42;`)...)
@@ -183,7 +187,7 @@ func TestExtensionRedis(t *testing.T) {
 }
 
 func redisFake(conn net.Conn, data *sync.Map) {
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	r := bufio.NewReader(conn)
 	for {
 		line, err := r.ReadString('\n')
@@ -193,33 +197,37 @@ func redisFake(conn net.Conn, data *sync.Map) {
 		n, _ := strconv.Atoi(strings.TrimSpace(line[1:]))
 		args := make([]string, n)
 		for i := range args {
-			r.ReadString('\n')
+			if _, err := r.ReadString('\n'); err != nil {
+				return
+			}
 			arg, _ := r.ReadString('\n')
 			args[i] = strings.TrimRight(arg, "\r\n")
 		}
 		switch strings.ToUpper(args[0]) {
 		case "PING":
-			fmt.Fprint(conn, "+PONG\r\n")
+			_, _ = fmt.Fprint(conn, "+PONG\r\n")
 		case "SET":
 			data.Store(args[1], args[2])
-			fmt.Fprint(conn, "+OK\r\n")
+			_, _ = fmt.Fprint(conn, "+OK\r\n")
 		case "SETEX":
 			data.Store(args[1], args[3])
-			fmt.Fprint(conn, "+OK\r\n")
+			_, _ = fmt.Fprint(conn, "+OK\r\n")
 		case "EXPIRE":
 			if _, ok := data.Load(args[1]); ok {
-				fmt.Fprint(conn, ":1\r\n")
+				_, _ = fmt.Fprint(conn, ":1\r\n")
 			} else {
-				fmt.Fprint(conn, ":0\r\n")
+				_, _ = fmt.Fprint(conn, ":0\r\n")
 			}
 		case "GET":
-			if v, ok := data.Load(args[1]); ok {
-				fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(v.(string)), v)
+			// Only strings are stored, so a non-string is a missing key.
+			v, _ := data.Load(args[1])
+			if s, ok := v.(string); ok {
+				_, _ = fmt.Fprintf(conn, "$%d\r\n%s\r\n", len(s), s)
 			} else {
-				fmt.Fprint(conn, "$-1\r\n")
+				_, _ = fmt.Fprint(conn, "$-1\r\n")
 			}
 		default:
-			fmt.Fprint(conn, "-ERR unknown command\r\n")
+			_, _ = fmt.Fprint(conn, "-ERR unknown command\r\n")
 		}
 	}
 }

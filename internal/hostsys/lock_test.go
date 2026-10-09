@@ -30,7 +30,7 @@ func holdSystemLock(t *testing.T, path string) *os.File {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { f.Close() })
+	t.Cleanup(func() { _ = f.Close() })
 	if err := syscall.Flock(int(f.Fd()), syscall.LOCK_EX|syscall.LOCK_NB); err != nil {
 		t.Fatal(err)
 	}
@@ -89,7 +89,9 @@ func TestSystemLock(t *testing.T) {
 		// Once the holder lets go, the same fd gets the lock, and Close
 		// releases it.
 		s.run = guestRun{ctx: ctx, intr: make(chan struct{})}
-		syscall.Flock(int(holder.Fd()), syscall.LOCK_UN)
+		if err := syscall.Flock(int(holder.Fd()), syscall.LOCK_UN); err != nil {
+			t.Fatal(err)
+		}
 		if got := lock(x, 3, file, systemLockExclusive); got != 0 {
 			t.Fatalf("free: errno %d, want 0", got)
 		}
@@ -110,12 +112,14 @@ func TestSystemLock(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer probe.Close()
+		defer func() { _ = probe.Close() }()
 		free := func() bool {
 			if syscall.Flock(int(probe.Fd()), syscall.LOCK_EX|syscall.LOCK_NB) != nil {
 				return false
 			}
-			syscall.Flock(int(probe.Fd()), syscall.LOCK_UN)
+			if err := syscall.Flock(int(probe.Fd()), syscall.LOCK_UN); err != nil {
+				t.Fatal(err)
+			}
 			return true
 		}
 		_, x := newSystemLocks(guestRun{ctx: ctx})

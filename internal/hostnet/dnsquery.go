@@ -104,10 +104,14 @@ func dnsExchange(ctx context.Context, server string, q []byte, id uint16) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	defer conn.Close()
-	stop := context.AfterFunc(ctx, func() { conn.SetDeadline(time.Now()) })
+	// Only the answer matters, and a close error cannot change it.
+	defer func() { _ = conn.Close() }()
+	// If this fails, the conn is closed already, which wakes the read too.
+	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
 	defer stop()
-	conn.SetDeadline(time.Now().Add(dnsTimeout))
+	if err := conn.SetDeadline(time.Now().Add(dnsTimeout)); err != nil {
+		return nil, err
+	}
 	if _, err := conn.Write(q); err != nil {
 		return nil, err
 	}
@@ -130,10 +134,12 @@ func dnsExchange(ctx context.Context, server string, q []byte, id uint16) ([]byt
 	if err != nil {
 		return nil, err
 	}
-	defer tc.Close()
-	stopTCP := context.AfterFunc(ctx, func() { tc.SetDeadline(time.Now()) })
+	defer func() { _ = tc.Close() }()
+	stopTCP := context.AfterFunc(ctx, func() { _ = tc.SetDeadline(time.Now()) })
 	defer stopTCP()
-	tc.SetDeadline(time.Now().Add(dnsTimeout))
+	if err := tc.SetDeadline(time.Now().Add(dnsTimeout)); err != nil {
+		return nil, err
+	}
 	if _, err := tc.Write(append(binary.BigEndian.AppendUint16(nil, uint16(len(q))), q...)); err != nil {
 		return nil, err
 	}
@@ -155,7 +161,8 @@ func dnsExchange(ctx context.Context, server string, q []byte, id uint16) ([]byt
 func dnsServers() []string {
 	var servers []string
 	if f, err := os.Open("/etc/resolv.conf"); err == nil {
-		defer f.Close()
+		// Opened read-only, so closing it loses nothing.
+		defer func() { _ = f.Close() }()
 		s := bufio.NewScanner(f)
 		for s.Scan() {
 			fields := strings.Fields(s.Text())

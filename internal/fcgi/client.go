@@ -21,7 +21,14 @@ import (
 // stdin is sent while the response is read, as a responder may read its
 // body only after it starts writing. When ctx is done, conn is closed.
 func Do(ctx context.Context, conn net.Conn, params map[string]string, stdin io.Reader, stdout, stderr io.Writer) (int, error) {
-	stop := context.AfterFunc(ctx, func() { conn.SetDeadline(time.Unix(1, 0)) })
+	// abort wakes the reader. The request may be in flight, so a failed
+	// SetDeadline cannot be returned: close conn instead.
+	abort := func() {
+		if conn.SetDeadline(time.Unix(1, 0)) != nil {
+			_ = conn.Close() // the reader reports the failure
+		}
+	}
+	stop := context.AfterFunc(ctx, abort)
 	defer stop()
 
 	c := &serverConn{conn: conn, r: bufio.NewReader(conn), w: bufio.NewWriter(conn)}
@@ -33,7 +40,7 @@ func Do(ctx context.Context, conn net.Conn, params map[string]string, stdin io.R
 		if err != nil {
 			// The responder may wait for the rest of the body forever. The
 			// reader wakes and finds err.
-			conn.SetDeadline(time.Unix(1, 0))
+			abort()
 		}
 	}()
 

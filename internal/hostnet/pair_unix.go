@@ -19,12 +19,14 @@ func socketPair() (net.Conn, net.Conn, error) {
 	}
 	a, err := socketPairConn(fds[0])
 	if err != nil {
-		syscall.Close(fds[1])
+		// The original error wins.
+		_ = syscall.Close(fds[1])
 		return nil, nil, err
 	}
 	b, err := socketPairConn(fds[1])
 	if err != nil {
-		a.Close()
+		// The original error wins.
+		_ = a.Close()
 		return nil, nil, err
 	}
 	return a, b, nil
@@ -32,6 +34,7 @@ func socketPair() (net.Conn, net.Conn, error) {
 
 func socketPairConn(fd int) (net.Conn, error) {
 	f := os.NewFile(uintptr(fd), "socketpair")
-	defer f.Close()
+	// FileConn duplicates the fd, so this closes only the original.
+	defer func() { _ = f.Close() }()
 	return net.FileConn(f)
 }

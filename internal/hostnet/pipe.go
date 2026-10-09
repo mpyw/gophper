@@ -84,7 +84,9 @@ func (t *Sockets) ChildFile(fd int32) (*os.File, func(), error) {
 		if err != nil {
 			return nil, nil, err
 		}
-		return f, func() { f.Close() }, nil
+		// The duplicate is released once the child has its own copy, so a
+		// close error affects neither side.
+		return f, func() { _ = f.Close() }, nil
 	}
 	return nil, nil, errors.New("hostnet: this socket cannot be given to a child process")
 }

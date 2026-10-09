@@ -40,8 +40,8 @@ func startHTTPWith(t *testing.T, configure func(*server.HTTPConfig)) *httptest.S
 	srv := httptest.NewServer(h)
 	t.Cleanup(func() {
 		srv.Close()
-		h.Close()
-		engine.Close(context.Background())
+		_ = h.Close()
+		_ = engine.Close(context.Background())
 	})
 	return srv
 }
@@ -63,7 +63,7 @@ func get(t *testing.T, url string) (*http.Response, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	b, _ := io.ReadAll(res.Body)
 	return res, string(b)
 }
@@ -139,7 +139,7 @@ func TestHTTPPost(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(res.Body)
-	res.Body.Close()
+	_ = res.Body.Close()
 	if string(body) != `{"post":{"name":"gophper"},"cookie":{"a":"1","b":"2"},"raw":"name=gophper"}` {
 		t.Errorf("got %s", body)
 	}
@@ -152,7 +152,7 @@ func TestHTTPPost(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, _ = io.ReadAll(res.Body)
-	res.Body.Close()
+	_ = res.Body.Close()
 	if !strings.Contains(string(body), `"raw":"chunked body"`) {
 		t.Errorf("got %s", body)
 	}
@@ -163,12 +163,12 @@ func TestHTTPS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer engine.Close(context.Background())
+	defer func() { _ = engine.Close(context.Background()) }()
 	h, err := server.NewHTTPHandler(engine, server.HTTPConfig{Root: "testdata/app", PHPConfig: server.PHPConfig{TempDir: t.TempDir()}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer h.Close()
+	defer func() { _ = h.Close() }()
 	srv := httptest.NewTLSServer(h)
 	defer srv.Close()
 	res, err := srv.Client().Get(srv.URL + "/")
@@ -176,7 +176,7 @@ func TestHTTPS(t *testing.T) {
 		t.Fatal(err)
 	}
 	body, _ := io.ReadAll(res.Body)
-	res.Body.Close()
+	_ = res.Body.Close()
 	if !strings.Contains(string(body), `"https":"on"`) {
 		t.Errorf("got %s", body)
 	}
@@ -190,7 +190,7 @@ func TestHTTPStreaming(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	line, err := bufio.NewReader(res.Body).ReadString('\n')
 	if err != nil || line != "first\n" {
 		t.Fatalf("%q %v", line, err)
@@ -233,7 +233,7 @@ func TestHTTPRootOutsideMounts(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer engine.Close(context.Background())
+	defer func() { _ = engine.Close(context.Background()) }()
 	other := t.TempDir()
 	_, err = server.NewHTTPHandler(engine, server.HTTPConfig{Root: "testdata/app", PHPConfig: server.PHPConfig{Mounts: []server.Mount{{Dir: other}}}})
 	if err == nil || !strings.Contains(err.Error(), "outside every mount") {
@@ -295,7 +295,7 @@ func TestHTTPMaxBodySize(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		res.Body.Close()
+		_ = res.Body.Close()
 		if res.StatusCode != http.StatusRequestEntityTooLarge {
 			t.Errorf("chunked=%v: status %d", chunked, res.StatusCode)
 		}
@@ -315,7 +315,7 @@ func TestHTTPMaxWaitTime(t *testing.T) {
 			slow <- 0
 			return
 		}
-		res.Body.Close()
+		_ = res.Body.Close()
 		slow <- res.StatusCode
 	}()
 	time.Sleep(200 * time.Millisecond)

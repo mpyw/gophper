@@ -23,7 +23,7 @@ func newGuest(t *testing.T) api.Module {
 	t.Helper()
 	ctx := context.Background()
 	r := wazero.NewRuntime(ctx)
-	t.Cleanup(func() { r.Close(ctx) })
+	t.Cleanup(func() { _ = r.Close(ctx) })
 	m, err := r.Instantiate(ctx, guestModuleWasm)
 	if err != nil {
 		t.Fatal(err)

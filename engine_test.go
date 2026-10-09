@@ -175,7 +175,7 @@ func newEngineWith(t *testing.T, cfg gophper.EngineConfig) *gophper.Engine {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { e.Close(context.Background()) })
+	t.Cleanup(func() { _ = e.Close(context.Background()) })
 	return e
 }
 
@@ -252,7 +252,7 @@ func TestEngineCacheDirInvalid(t *testing.T) {
 	}
 	e, err := gophper.NewEngine(context.Background(), gophper.EngineConfig{CacheDir: file})
 	if err == nil {
-		e.Close(context.Background())
+		_ = e.Close(context.Background())
 		t.Fatal("no error for a cache directory that is a file")
 	}
 	if !strings.Contains(err.Error(), "compilation cache") {

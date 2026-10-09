@@ -4,10 +4,15 @@ version: "2"
 # allow list (strict): an import outside it is reported. Rules whose files
 # match all apply, so a file must pass each of them.
 linters:
-  default: none
+  default: standard
   enable:
     - depguard
   settings:
+    # Every error is checked, or dropped with _ = and a reason. None of the
+    # default exclusions, such as Close and fmt.Fprint*, apply.
+    errcheck:
+      check-type-assertions: true
+      disable-default-exclusions: true
     depguard:
       rules:
         everywhere:

@@ -86,7 +86,7 @@ func TestDatabaseSQLiteLocks(t *testing.T) {
 					HostPath: func(path string) (string, bool, bool) { return path, true, true },
 				})
 				if err != nil {
-					fmt.Fprint(&out, err)
+					_, _ = fmt.Fprint(&out, err)
 				}
 				first <- out.String()
 			}()
@@ -108,7 +108,9 @@ func TestDatabaseSQLiteLocks(t *testing.T) {
 				}
 			}
 			second, _ := runPHP(t, lock)
-			os.WriteFile(release, nil, 0o644)
+			if err := os.WriteFile(release, nil, 0o644); err != nil {
+				t.Fatal(err)
+			}
 			<-first
 			if second != "failed" {
 				t.Errorf("second instance: %s, while the first held an exclusive lock", second)

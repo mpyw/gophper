@@ -36,8 +36,8 @@ func poolForTest(t *testing.T) (*pool, map[string]string) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		p.close()
-		engine.Close(context.Background())
+		_ = p.close()
+		_ = engine.Close(context.Background())
 	})
 	return p, map[string]string{"SCRIPT_FILENAME": filepath.Join(root, "index.php"), "REQUEST_METHOD": "GET"}
 }

@@ -182,7 +182,12 @@ func (l *Linker) Open(ctx context.Context, main api.Module, bin []byte) (int32, 
 			return 0, err
 		}
 		for i, name := range selfFuncs {
-			glue["env"].ExportedGlobal(linkerSlotPrefix + name).(api.MutableGlobal).Set(uint64(slots[i]))
+			// The env glue defines each slot as mutable, so this always holds.
+			g, ok := glue["env"].ExportedGlobal(linkerSlotPrefix + name).(api.MutableGlobal)
+			if !ok {
+				return 0, fmt.Errorf("trampoline slot of %s is not a mutable global", name)
+			}
+			g.Set(uint64(slots[i]))
 		}
 	}
 
@@ -325,7 +330,12 @@ func (l *Linker) setFuncGOT(ctx context.Context, main, got, from api.Module, nam
 		return err
 	}
 	for i, name := range names {
-		got.ExportedGlobal(name).(api.MutableGlobal).Set(uint64(slots[i]))
+		// The GOT.func glue defines each entry as mutable, so this always holds.
+		g, ok := got.ExportedGlobal(name).(api.MutableGlobal)
+		if !ok {
+			return fmt.Errorf("GOT.func entry %s is not a mutable global", name)
+		}
+		g.Set(uint64(slots[i]))
 	}
 	return nil
 }

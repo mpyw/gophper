@@ -35,7 +35,7 @@ func newFunctionHarness(t *testing.T, fns map[string]Function) *functionHarness 
 	t.Helper()
 	ctx := context.Background()
 	r := wazero.NewRuntime(ctx)
-	t.Cleanup(func() { r.Close(ctx) })
+	t.Cleanup(func() { _ = r.Close(ctx) })
 	m, err := r.Instantiate(ctx, functionGuestWasm)
 	if err != nil {
 		t.Fatal(err)

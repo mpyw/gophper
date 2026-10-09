@@ -106,7 +106,7 @@ func (h *socketHarness) recvAll(fd int32, n int) string {
 		if r <= 0 {
 			h.t.Fatalf("recv = %d after %d bytes", r, b.Len())
 		}
-		b.WriteString(data)
+		_, _ = b.WriteString(data)
 	}
 	return b.String()
 }
@@ -148,7 +148,7 @@ func socketEchoListener(t *testing.T, network, addr string) net.Listener {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { l.Close() })
+	t.Cleanup(func() { _ = l.Close() })
 	go func() {
 		for {
 			c, err := l.Accept()
@@ -156,8 +156,9 @@ func socketEchoListener(t *testing.T, network, addr string) net.Listener {
 				return
 			}
 			go func() {
-				defer c.Close()
-				io.Copy(c, c)
+				defer func() { _ = c.Close() }()
+				// The copy ends when either side closes; the client checks what came back.
+				_, _ = io.Copy(c, c)
 			}()
 		}
 	}()
@@ -171,7 +172,7 @@ func socketEchoPacket(t *testing.T) net.PacketConn {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { pc.Close() })
+	t.Cleanup(func() { _ = pc.Close() })
 	go func() {
 		buf := make([]byte, 1500)
 		for {
@@ -179,7 +180,8 @@ func socketEchoPacket(t *testing.T) net.PacketConn {
 			if err != nil {
 				return
 			}
-			pc.WriteTo(append([]byte("echo: "), buf[:n]...), from)
+			// A lost echo shows as a failed recv in the test.
+			_, _ = pc.WriteTo(append([]byte("echo: "), buf[:n]...), from)
 		}
 	}()
 	return pc
@@ -193,7 +195,9 @@ func socketClosedPort(t *testing.T) string {
 		t.Fatal(err)
 	}
 	addr := l.Addr().String()
-	l.Close()
+	if err := l.Close(); err != nil {
+		t.Fatal(err)
+	}
 	return addr
 }
 
@@ -314,7 +318,7 @@ func TestSocketAcceptInheritsOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	if errno := h.x.accept(h.ctx, 1, 2, 0); errno != 0 {
 		t.Fatalf("accept = %d", errno)
 	}
@@ -326,7 +330,9 @@ func TestSocketAcceptInheritsOptions(t *testing.T) {
 	if peer, _ := h.name(2, 1, 64); peer != c.LocalAddr().String() {
 		t.Errorf("peer = %q, want %q", peer, c.LocalAddr())
 	}
-	c.Write([]byte("from client"))
+	if _, err := c.Write([]byte("from client")); err != nil {
+		t.Fatal(err)
+	}
 	if got := h.recvAll(2, len("from client")); got != "from client" {
 		t.Errorf("recv = %q", got)
 	}
@@ -340,7 +346,9 @@ func TestSocketAcceptAfterListenerFails(t *testing.T) {
 	h.open(1, socketTCP)
 	h.x.listen(h.ctx, 1, 8)
 	// The listener dies under the socket, as on a host error.
-	h.entry(1).listener.Close()
+	if err := h.entry(1).listener.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if errno := h.x.accept(h.ctx, 1, 2, 0); errno != wasi.EBADF {
 		t.Errorf("accept = %d, want EBADF", errno)
 	}
@@ -634,7 +642,7 @@ func TestSocketUnixgram(t *testing.T) {
 	if err != nil {
 		t.Skip(err)
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	path := dir + "/s.sock"
 
 	h := newSocketHarness(t)
@@ -678,7 +686,9 @@ func TestSocketSendErrors(t *testing.T) {
 	}
 	l := socketEchoListener(t, "tcp", "127.0.0.1:0")
 	h.connect(1, l.Addr().String(), 0)
-	h.entry(1).conn.Close()
+	if err := h.entry(1).conn.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if n := h.send(1, "x", "", 0); n != -wasi.EPIPE {
 		t.Errorf("send on a closed connection = %d, want -EPIPE", n)
 	}
@@ -694,13 +704,13 @@ func TestSocketShutdown(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }()
 	h.connect(1, l.Addr().String(), 0)
 	peer, err := l.Accept()
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer peer.Close()
+	defer func() { _ = peer.Close() }()
 
 	if errno := h.x.shutdown(h.ctx, 1, 2); errno != 0 {
 		t.Fatalf("shutdown(SHUT_WR) = %d", errno)
@@ -715,15 +725,21 @@ func TestSocketShutdown(t *testing.T) {
 		t.Errorf("writable after SHUT_WR: %d", ev)
 	}
 	// Reading still works, until the peer closes.
-	peer.Write([]byte("bye"))
-	peer.Close()
+	if _, err := peer.Write([]byte("bye")); err != nil {
+		t.Fatal(err)
+	}
+	if err := peer.Close(); err != nil {
+		t.Fatal(err)
+	}
 	if got := h.recvAll(1, 3); got != "bye" {
 		t.Errorf("recv = %q", got)
 	}
 	if _, _, r := h.recv(1, 10, 0); r != 0 {
 		t.Errorf("recv at EOF = %d", r)
 	}
-	if errno := h.x.shutdown(h.ctx, 1, 1); errno != 0 {
+	// Both directions are closed now. Linux's shutdown(2) still succeeds,
+	// and macOS's reports ENOTCONN.
+	if errno := h.x.shutdown(h.ctx, 1, 1); errno != 0 && errno != wasi.ENOTCONN {
 		t.Errorf("shutdown(SHUT_RD) = %d", errno)
 	}
 
@@ -804,8 +820,12 @@ func TestSocketPair(t *testing.T) {
 	big := bytes.Repeat([]byte("0123456789abcdef"), (socketMaxBuffered+socketBufCap)/16*2)
 	go func() {
 		c := h.entry(2).conn
-		c.Write(big)
-		c.Close()
+		if _, err := c.Write(big); err != nil {
+			t.Error(err)
+		}
+		if err := c.Close(); err != nil {
+			t.Error(err)
+		}
 	}()
 	h.x.available(h.ctx, 1)
 	h.await(1, func(e *socketEntry) bool { return len(e.recvBuf) >= socketMaxBuffered })
@@ -826,7 +846,7 @@ func TestSocketCloseAll(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	h.await(1, func(e *socketEntry) bool { return len(e.pending) > 0 })
 	h.open(2, socketUDP)
 	h.bind(2, "127.0.0.1:0")
@@ -834,7 +854,9 @@ func TestSocketCloseAll(t *testing.T) {
 	if len(h.tab.entries) != 0 {
 		t.Errorf("%d sockets left", len(h.tab.entries))
 	}
-	c.SetReadDeadline(time.Now().Add(2 * time.Second))
+	if err := c.SetReadDeadline(time.Now().Add(2 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	if _, err := c.Read(make([]byte, 1)); err == nil {
 		t.Error("a pending connection stayed open")
 	}
@@ -858,5 +880,59 @@ func TestSocketPlaceholderFS(t *testing.T) {
 	}
 	if _, err := SocketPlaceholderFS.Open("other"); !errors.Is(err, fs.ErrNotExist) {
 		t.Errorf("Open(other) = %v", err)
+	}
+}
+
+// When the host refuses an option, setsockopt fails and the option keeps its
+// old value.
+func TestSocketSetoptHostFailure(t *testing.T) {
+	h := newSocketHarness(t)
+	h.open(1, socketTCP)
+	l := socketEchoListener(t, "tcp", "127.0.0.1:0")
+	if errno := h.connect(1, l.Addr().String(), 0); errno != 0 {
+		t.Fatalf("connect = %d", errno)
+	}
+	before := map[int32]int32{}
+	for _, opt := range []int32{socketOptNodelay, socketOptKeepalive, socketOptRcvbuf, socketOptSndbuf} {
+		before[opt], _ = h.getopt(1, opt)
+	}
+	if err := h.entry(1).conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for opt, old := range before {
+		value := int32(1)
+		if opt == socketOptRcvbuf || opt == socketOptSndbuf {
+			value = 4096
+		}
+		if old == value {
+			value = 0
+		}
+		if errno := h.x.setopt(h.ctx, 1, opt, value); errno != wasi.EBADF {
+			t.Errorf("setopt(%d) on a closed connection = %d, want EBADF", opt, errno)
+		}
+		if v, _ := h.getopt(1, opt); v != old {
+			t.Errorf("getopt(%d) after a failed setopt = %d, want %d", opt, v, old)
+		}
+	}
+}
+
+// When the host's shutdown fails, the guest gets the errno.
+func TestSocketShutdownHostFailure(t *testing.T) {
+	h := newSocketHarness(t)
+	h.open(1, socketTCP)
+	l := socketEchoListener(t, "tcp", "127.0.0.1:0")
+	if errno := h.connect(1, l.Addr().String(), 0); errno != 0 {
+		t.Fatalf("connect = %d", errno)
+	}
+	if err := h.entry(1).conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, how := range []int32{1, 2, 3} {
+		if errno := h.x.shutdown(h.ctx, 1, how); errno != wasi.EBADF {
+			t.Errorf("shutdown(%d) on a closed connection = %d, want EBADF", how, errno)
+		}
+	}
+	if h.entry(1).shutWrite {
+		t.Error("shutWrite set after a failed shutdown")
 	}
 }

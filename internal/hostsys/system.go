@@ -50,7 +50,7 @@ func (s *System) Close() {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	for fd, f := range s.locks {
-		f.Close()
+		_ = f.Close() // Closing releases the lock; its error changes nothing.
 		delete(s.locks, fd)
 	}
 }

@@ -93,18 +93,26 @@ func TestHTTPSlowBody(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.Close()
+	defer func() { _ = conn.Close() }()
 	// Larger than what is kept in memory, so that it goes to a file.
 	const size = 3 << 20
-	io.WriteString(conn, "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: "+strconv.Itoa(size)+"\r\n\r\n")
-	conn.Write(make([]byte, size/2))
+	if _, err := io.WriteString(conn, "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: "+strconv.Itoa(size)+"\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := conn.Write(make([]byte, size/2)); err != nil {
+		t.Fatal(err)
+	}
 
 	if res, body := get(t, srv.URL+"/"); res.StatusCode != 200 || body != "0" {
 		t.Errorf("another request while a body stalls: %d %q", res.StatusCode, body)
 	}
 
-	conn.Write(make([]byte, size-size/2))
-	conn.SetDeadline(time.Now().Add(10 * time.Second))
+	if _, err := conn.Write(make([]byte, size-size/2)); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+		t.Fatal(err)
+	}
 	res, err := http.ReadResponse(bufio.NewReader(conn), nil)
 	if err != nil {
 		t.Fatal(err)

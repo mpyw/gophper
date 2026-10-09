@@ -15,6 +15,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -45,17 +46,24 @@ func main() {
 	err := newRootCommand().Run(ctx, args)
 	stop()
 
-	var exit cli.ExitCoder
+	exit, isExit := errors.AsType[cli.ExitCoder](err)
 	switch {
-	case errors.As(err, &exit):
-		if msg := exit.Error(); msg != "" {
-			fmt.Fprintln(os.Stderr, "gophper:", msg)
+	case isExit:
+		// err, not exit: a teardown error may be joined to the exit code.
+		if msg := strings.TrimSpace(err.Error()); msg != "" {
+			logf(os.Stderr, "gophper: %s\n", msg)
 		}
 		os.Exit(exit.ExitCode())
 	case err != nil:
-		fmt.Fprintln(os.Stderr, "gophper:", err)
+		logf(os.Stderr, "gophper: %v\n", err)
 		os.Exit(1)
 	}
+}
+
+// logf writes a diagnostic. A failed write to stderr has nowhere to be
+// reported, so its error is dropped here.
+func logf(w io.Writer, format string, args ...any) {
+	_, _ = fmt.Fprintf(w, format, args...)
 }
 
 func newRootCommand() *cli.Command {
@@ -369,7 +377,7 @@ func engineConfig(cmd *cli.Command) (gophper.EngineConfig, error) {
 	bin, err := phpBinaryScript(cfg.CacheDir, global)
 	if err != nil {
 		// PHP still runs. Only PHP_BINARY is empty.
-		fmt.Fprintf(cmd.Root().ErrWriter, "gophper: PHP_BINARY: %v\n", err)
+		logf(cmd.Root().ErrWriter, "gophper: PHP_BINARY: %v\n", err)
 	}
 	cfg.PHPBinary = bin
 	return cfg, nil
@@ -377,7 +385,7 @@ func engineConfig(cmd *cli.Command) (gophper.EngineConfig, error) {
 
 // phpConfig reads the options in phpFlags. The returned function closes
 // the access log.
-func phpConfig(cmd *cli.Command) (server.PHPConfig, func(), error) {
+func phpConfig(cmd *cli.Command) (server.PHPConfig, func() error, error) {
 	cfg := server.PHPConfig{
 		TempDir:     cmd.String("temp-dir"),
 		NoProcesses: cmd.Bool("no-processes"),
@@ -410,7 +418,7 @@ func phpConfig(cmd *cli.Command) (server.PHPConfig, func(), error) {
 		}
 	}
 
-	closeLog := func() {}
+	closeLog := func() error { return nil }
 	switch path := cmd.String("access-log"); path {
 	case "":
 	case "-":
@@ -421,13 +429,13 @@ func phpConfig(cmd *cli.Command) (server.PHPConfig, func(), error) {
 			return cfg, nil, err
 		}
 		cfg.AccessLog = f
-		closeLog = func() { f.Close() }
+		closeLog = f.Close
 	}
 	return cfg, closeLog, nil
 }
 
 // phpAction mounts the host file system at "/" and starts in the current directory.
-func phpAction(ctx context.Context, cmd *cli.Command) error {
+func phpAction(ctx context.Context, cmd *cli.Command) (err error) {
 	wd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -436,7 +444,7 @@ func phpAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	defer engine.Close(context.Background())
+	defer func() { err = errors.Join(err, engine.Close(context.Background())) }()
 	// Signals go to PHP, as to a native php: pcntl handlers run, and the
 	// rest end the script as their default action would. So the run does
 	// not stop with ctx, which main cancels on the first SIGINT.
@@ -465,7 +473,7 @@ func phpAction(ctx context.Context, cmd *cli.Command) error {
 	return nil
 }
 
-func serveAction(ctx context.Context, cmd *cli.Command) error {
+func serveAction(ctx context.Context, cmd *cli.Command) (err error) {
 	cert, key, domains := cmd.String("tls-cert"), cmd.String("tls-key"), cmd.StringSlice("domain")
 	switch {
 	case (cert == "") != (key == ""):
@@ -482,7 +490,7 @@ func serveAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	defer closeLog()
+	defer func() { err = errors.Join(err, closeLog()) }()
 	cfg := server.HTTPConfig{
 		PHPConfig:   php,
 		Root:        cmd.String("root"),
@@ -502,12 +510,12 @@ func serveAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	defer engine.Close(context.Background())
+	defer func() { err = errors.Join(err, engine.Close(context.Background())) }()
 	h, err := server.NewHTTPHandler(engine, cfg)
 	if err != nil {
 		return err
 	}
-	defer h.Close()
+	defer func() { err = errors.Join(err, h.Close()) }()
 
 	listen := cmd.String("listen")
 	switch {
@@ -548,7 +556,7 @@ func serveAction(ctx context.Context, cmd *cli.Command) error {
 		if s.TLSConfig != nil {
 			scheme = "https"
 		}
-		fmt.Fprintf(os.Stderr, "gophper: serving %s on %s://%s\n", cfg.Root, scheme, l.Addr())
+		logf(os.Stderr, "gophper: serving %s on %s://%s\n", cfg.Root, scheme, l.Addr())
 		go func() {
 			if s.TLSConfig != nil {
 				errs <- s.ServeTLS(l, "", "")
@@ -567,18 +575,19 @@ func serveAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
+	// A timeout here means requests were cut off, which the caller hears of.
 	for _, s := range servers {
-		s.Shutdown(shutdownCtx)
+		err = errors.Join(err, s.Shutdown(shutdownCtx))
 	}
-	return nil
+	return err
 }
 
-func fcgiAction(ctx context.Context, cmd *cli.Command) error {
+func fcgiAction(ctx context.Context, cmd *cli.Command) (err error) {
 	php, closeLog, err := phpConfig(cmd)
 	if err != nil {
 		return err
 	}
-	defer closeLog()
+	defer func() { err = errors.Join(err, closeLog()) }()
 	cfg := server.FastCGIConfig{
 		PHPConfig:       php,
 		LimitExtensions: cmd.StringSlice("limit-extensions"),
@@ -595,18 +604,19 @@ func fcgiAction(ctx context.Context, cmd *cli.Command) error {
 	if err != nil {
 		return err
 	}
-	defer engine.Close(context.Background())
+	defer func() { err = errors.Join(err, engine.Close(context.Background())) }()
 	srv, err := server.NewFastCGIServer(engine, cfg)
 	if err != nil {
 		return err
 	}
-	defer srv.Close()
+	defer func() { err = errors.Join(err, srv.Close()) }()
 
 	listen := cmd.String("listen")
 	network, address := "tcp", listen
 	if path, ok := strings.CutPrefix(listen, "unix:"); ok {
 		network, address = "unix", path
-		os.Remove(path)
+		// A stale socket from an earlier run. If it cannot go, Listen says why.
+		_ = os.Remove(path)
 	}
 	l, err := net.Listen(network, address)
 	if err != nil {
@@ -614,17 +624,18 @@ func fcgiAction(ctx context.Context, cmd *cli.Command) error {
 	}
 	if network == "unix" {
 		if err := os.Chmod(address, os.FileMode(mode)); err != nil {
-			l.Close()
-			return err
+			return errors.Join(err, l.Close())
 		}
 	}
-	fmt.Fprintf(os.Stderr, "gophper: FastCGI on %s\n", l.Addr())
+	logf(os.Stderr, "gophper: FastCGI on %s\n", l.Addr())
 	return srv.Serve(ctx, l)
 }
 
 func extensionListAction(_ context.Context, cmd *cli.Command) error {
 	for _, name := range phpext.Names() {
-		fmt.Fprintln(cmd.Root().Writer, name)
+		if _, err := fmt.Fprintln(cmd.Root().Writer, name); err != nil {
+			return err
+		}
 	}
 	return nil
 }
@@ -652,7 +663,9 @@ func extensionInstallAction(_ context.Context, cmd *cli.Command) error {
 		if err := os.WriteFile(path, so, 0o644); err != nil {
 			return err
 		}
-		fmt.Fprintln(cmd.Root().Writer, path)
+		if _, err := fmt.Fprintln(cmd.Root().Writer, path); err != nil {
+			return err
+		}
 		// Such as intl's ICU data, which it reads from the same directory.
 		for _, file := range phpext.Files(name) {
 			b, err := phpext.OpenFile(name, file)
@@ -663,7 +676,9 @@ func extensionInstallAction(_ context.Context, cmd *cli.Command) error {
 			if err := os.WriteFile(path, b, 0o644); err != nil {
 				return err
 			}
-			fmt.Fprintln(cmd.Root().Writer, path)
+			if _, err := fmt.Fprintln(cmd.Root().Writer, path); err != nil {
+				return err
+			}
 		}
 	}
 	return nil

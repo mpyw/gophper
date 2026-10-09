@@ -29,8 +29,7 @@ func errnoFrom(err error) int32 {
 	case errors.Is(err, context.Canceled):
 		return wasi.EINTR
 	}
-	var dnsErr *net.DNSError
-	if errors.As(err, &dnsErr) {
+	if _, ok := errors.AsType[*net.DNSError](err); ok {
 		return wasi.EHOSTUNREACH
 	}
 	return wasi.EIO

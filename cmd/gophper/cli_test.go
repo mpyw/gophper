@@ -57,10 +57,10 @@ func TestMain(m *testing.M) {
 func cliMain(m *testing.M) int {
 	dir, err := os.MkdirTemp("", "gophper-cli-test-")
 	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
+		_, _ = fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	defer os.RemoveAll(dir)
+	defer func() { _ = os.RemoveAll(dir) }()
 	cliBinary = filepath.Join(dir, "gophper")
 	if runtime.GOOS == "windows" {
 		cliBinary += ".exe"
@@ -73,7 +73,7 @@ func cliMain(m *testing.M) int {
 			err = os.MkdirAll(cliCoverDir, 0o755)
 		}
 		if err != nil {
-			fmt.Fprintln(os.Stderr, "GOPHPER_TEST_COVERDIR:", err)
+			_, _ = fmt.Fprintln(os.Stderr, "GOPHPER_TEST_COVERDIR:", err)
 			return 1
 		}
 		args = append(args, "-cover", "-covermode=atomic", "-coverpkg=github.com/mpyw/gophper/...")
@@ -81,7 +81,7 @@ func cliMain(m *testing.M) int {
 	build := exec.Command("go", append(args, ".")...)
 	build.Stdout, build.Stderr = os.Stderr, os.Stderr
 	if err := build.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "building gophper:", err)
+		_, _ = fmt.Fprintln(os.Stderr, "building gophper:", err)
 		return 1
 	}
 	return m.Run()
@@ -172,15 +172,15 @@ func (s *cliServer) stop(t *testing.T) int {
 	t.Helper()
 	if s.cmd.ProcessState == nil {
 		if runtime.GOOS == "windows" {
-			s.cmd.Process.Kill()
+			_ = s.cmd.Process.Kill()
 		} else {
-			s.cmd.Process.Signal(syscall.SIGTERM)
+			_ = s.cmd.Process.Signal(syscall.SIGTERM)
 		}
 		select {
 		case err := <-s.done:
 			s.done <- err
 		case <-time.After(time.Minute):
-			s.cmd.Process.Kill()
+			_ = s.cmd.Process.Kill()
 			t.Error("the server did not stop on SIGTERM")
 			<-s.done
 		}
@@ -204,7 +204,7 @@ func cliGet(t *testing.T, client *http.Client, url string) (int, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	b, _ := io.ReadAll(res.Body)
 	return res.StatusCode, string(b)
 }
@@ -487,7 +487,7 @@ func TestCLIFastCGI(t *testing.T) {
 				}
 				var out, errOut bytes.Buffer
 				_, err = fcgi.Do(context.Background(), conn, params, nil, &out, &errOut)
-				conn.Close()
+				_ = conn.Close()
 				if err != nil || !strings.HasSuffix(out.String(), tt.want) {
 					t.Errorf("%s: %v %q %s", tt.uri, err, out.String(), errOut.String())
 				}

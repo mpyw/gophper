@@ -22,12 +22,13 @@ func fcgiDial(t *testing.T, addr string) net.Conn {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { conn.Close() })
+	t.Cleanup(func() { _ = conn.Close() })
 	return conn
 }
 
-// fcgiFakeResponder accepts one connection and runs respond on it.
-func fcgiFakeResponder(t *testing.T, respond func(c *serverConn)) string {
+// fcgiFakeResponder accepts one connection and runs respond on it. An error
+// from respond fails the test.
+func fcgiFakeResponder(t *testing.T, respond func(c *serverConn) error) string {
 	t.Helper()
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
@@ -40,12 +41,17 @@ func fcgiFakeResponder(t *testing.T, respond func(c *serverConn)) string {
 		if err != nil {
 			return
 		}
-		defer conn.Close()
-		conn.SetDeadline(time.Now().Add(10 * time.Second))
-		respond(fcgiRawConnFrom(conn))
+		defer func() { _ = conn.Close() }()
+		if err := conn.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+			t.Error(err)
+			return
+		}
+		if err := respond(fcgiRawConnFrom(conn)); err != nil {
+			t.Errorf("responder: %v", err)
+		}
 	}()
 	t.Cleanup(func() {
-		l.Close()
+		_ = l.Close()
 		<-done
 	})
 	return l.Addr().String()
@@ -96,7 +102,7 @@ func TestDoNoStdin(t *testing.T) {
 func TestDoResponses(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
-		respond func(c *serverConn)
+		respond func(c *serverConn) error
 		code    int
 		stdout  string
 		stderr  string
@@ -104,48 +110,49 @@ func TestDoResponses(t *testing.T) {
 	}{
 		{
 			name: "records of other requests are ignored",
-			respond: func(c *serverConn) {
+			respond: func(c *serverConn) error {
 				c.fcgiReadRequest()
-				c.writeRecord(typeStdout, 2, []byte("not ours"))
-				c.writeRecord(typeStdout, 1, []byte("ours"))
-				c.writeRecord(typeStderr, 1, []byte("warn"))
-				c.writeRecord(typeGetValuesResult, 1, nil)
-				c.endRequest(1, 42, protocolStatusRequestComplete, nil)
+				return errors.Join(
+					c.writeRecord(typeStdout, 2, []byte("not ours")),
+					c.writeRecord(typeStdout, 1, []byte("ours")),
+					c.writeRecord(typeStderr, 1, []byte("warn")),
+					c.writeRecord(typeGetValuesResult, 1, nil),
+					c.endRequest(1, 42, protocolStatusRequestComplete, nil),
+				)
 			},
 			code: 42, stdout: "ours", stderr: "warn",
 		},
 		{
 			name: "short FCGI_END_REQUEST",
-			respond: func(c *serverConn) {
+			respond: func(c *serverConn) error {
 				c.fcgiReadRequest()
-				c.writeRecord(typeEndRequest, 1, []byte{0, 0, 0})
-				c.flush()
+				return errors.Join(c.writeRecord(typeEndRequest, 1, []byte{0, 0, 0}), c.flush())
 			},
 			err: "short FCGI_END_REQUEST",
 		},
 		{
 			name: "refused",
-			respond: func(c *serverConn) {
+			respond: func(c *serverConn) error {
 				c.fcgiReadRequest()
-				c.endRequest(1, 0, protocolStatusCantMpxConn, nil)
+				return c.endRequest(1, 0, protocolStatusCantMpxConn, nil)
 			},
 			err: "refused the request (protocol status 1)",
 		},
 		{
 			name: "closed before the end",
-			respond: func(c *serverConn) {
+			respond: func(c *serverConn) error {
 				c.fcgiReadRequest()
-				c.writeRecord(typeStdout, 1, []byte("partial"))
-				c.flush()
+				return errors.Join(c.writeRecord(typeStdout, 1, []byte("partial")), c.flush())
 			},
 			stdout: "partial",
 			err:    "closed the connection before FCGI_END_REQUEST",
 		},
 		{
 			name: "bad record",
-			respond: func(c *serverConn) {
+			respond: func(c *serverConn) error {
 				c.fcgiReadRequest()
-				c.conn.Write([]byte{9, typeStdout, 0, 1, 0, 0, 0, 0})
+				_, err := c.conn.Write([]byte{9, typeStdout, 0, 1, 0, 0, 0, 0})
+				return err
 			},
 			err: "unsupported version 9",
 		},
@@ -165,10 +172,12 @@ func TestDoResponses(t *testing.T) {
 }
 
 func TestDoCanceled(t *testing.T) {
-	addr := fcgiFakeResponder(t, func(c *serverConn) {
+	addr := fcgiFakeResponder(t, func(c *serverConn) error {
 		c.fcgiReadRequest()
-		// Never answers, until the client gives up.
-		c.readRecord()
+		// Never answers, until the client gives up and closes the
+		// connection, which ends this read with an error.
+		_, _ = c.readRecord()
+		return nil
 	})
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
@@ -184,10 +193,12 @@ func (w fcgiFailingWriter) Write([]byte) (int, error) { return 0, w.err }
 func TestDoWriterFails(t *testing.T) {
 	for _, stream := range []uint8{typeStdout, typeStderr} {
 		t.Run(strconv.Itoa(int(stream)), func(t *testing.T) {
-			addr := fcgiFakeResponder(t, func(c *serverConn) {
+			addr := fcgiFakeResponder(t, func(c *serverConn) error {
 				c.fcgiReadRequest()
-				c.writeRecord(stream, 1, []byte("x"))
-				c.endRequest(1, 0, protocolStatusRequestComplete, nil)
+				return errors.Join(
+					c.writeRecord(stream, 1, []byte("x")),
+					c.endRequest(1, 0, protocolStatusRequestComplete, nil),
+				)
 			})
 			full := errors.New("disk full")
 			stdout, stderr := io.Writer(io.Discard), io.Writer(io.Discard)
@@ -221,10 +232,12 @@ func (r *fcgiFailingReader) Read(p []byte) (int, error) {
 // A body that fails to read ends the request, although the responder
 // still waits for the rest of it.
 func TestDoStdinFails(t *testing.T) {
-	addr := fcgiFakeResponder(t, func(c *serverConn) {
+	addr := fcgiFakeResponder(t, func(c *serverConn) error {
+		// Reads until the client closes the connection, which is the end
+		// this scenario expects, so the read error is not a failure.
 		for {
 			if _, err := c.readRecord(); err != nil {
-				return
+				return nil
 			}
 		}
 	})

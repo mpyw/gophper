@@ -155,12 +155,12 @@ func dnsTestServer(t *testing.T, udp func(q []byte) [][]byte, tcp func(q []byte)
 		if l, err = net.Listen("tcp", pc.LocalAddr().String()); err == nil {
 			break
 		}
-		pc.Close()
+		_ = pc.Close()
 	}
 	if l == nil {
 		t.Skip("no port free for both UDP and TCP")
 	}
-	t.Cleanup(func() { pc.Close(); l.Close() })
+	t.Cleanup(func() { _ = pc.Close(); _ = l.Close() })
 	go func() {
 		buf := make([]byte, 512)
 		for {
@@ -169,7 +169,8 @@ func dnsTestServer(t *testing.T, udp func(q []byte) [][]byte, tcp func(q []byte)
 				return
 			}
 			for _, p := range udp(append([]byte(nil), buf[:n]...)) {
-				pc.WriteTo(p, from)
+				// A lost answer shows as a failed exchange in the test.
+				_, _ = pc.WriteTo(p, from)
 			}
 		}
 	}()
@@ -180,13 +181,20 @@ func dnsTestServer(t *testing.T, udp func(q []byte) [][]byte, tcp func(q []byte)
 				return
 			}
 			var lenb [2]byte
-			io.ReadFull(c, lenb[:])
-			q := make([]byte, binary.BigEndian.Uint16(lenb[:]))
-			io.ReadFull(c, q)
-			if a := tcp(q); a != nil {
-				c.Write(append(binary.BigEndian.AppendUint16(nil, uint16(len(a))), a...))
+			if _, err := io.ReadFull(c, lenb[:]); err != nil {
+				_ = c.Close()
+				continue
 			}
-			c.Close()
+			q := make([]byte, binary.BigEndian.Uint16(lenb[:]))
+			if _, err := io.ReadFull(c, q); err != nil {
+				_ = c.Close()
+				continue
+			}
+			if a := tcp(q); a != nil {
+				// A lost answer shows as a failed exchange in the test.
+				_, _ = c.Write(append(binary.BigEndian.AppendUint16(nil, uint16(len(a))), a...))
+			}
+			_ = c.Close()
 		}
 	}()
 	return pc.LocalAddr().String()
