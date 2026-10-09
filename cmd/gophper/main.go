@@ -414,14 +414,14 @@ func phpConfig(cmd *cli.Command) (server.PHPConfig, func(), error) {
 		}
 		cfg.Mounts = append(cfg.Mounts, server.Mount{Dir: abs, ReadOnly: ro})
 	}
+	cfg.INI = cmd.StringSlice("define")
 	if file := cmd.String("php-ini"); file != "" {
-		b, err := os.ReadFile(file)
+		var err error
+		cfg.INI, err = server.MergeINIFile(file, cfg.INI)
 		if err != nil {
 			return cfg, nil, err
 		}
-		cfg.INI = strings.Split(string(b), "\n")
 	}
-	cfg.INI = append(cfg.INI, cmd.StringSlice("define")...)
 
 	closeLog := func() {}
 	switch path := cmd.String("access-log"); path {

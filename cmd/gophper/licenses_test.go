@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"io"
+	"os"
 	"os/exec"
 	"strings"
 	"testing"
@@ -13,8 +14,13 @@ import (
 
 // TestLicensesModules fails when go.mod changed without go generate.
 func TestLicensesModules(t *testing.T) {
-	out, err := exec.Command("go", "list", "-deps", "-f",
-		`{{with .Module}}{{if not .Main}}{{.Path}} {{.Version}}{{end}}{{end}}`, ".").Output()
+	if _, err := exec.LookPath("go"); err != nil {
+		t.Skip("no go command")
+	}
+	cmd := exec.Command("go", "list", "-deps", "-f",
+		`{{with .Module}}{{if not .Main}}{{.Path}} {{.Version}}{{end}}{{end}}`, ".")
+	cmd.Env = append(os.Environ(), "GOWORK=off")
+	out, err := cmd.Output()
 	if err != nil {
 		t.Fatal(err)
 	}

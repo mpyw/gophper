@@ -272,10 +272,8 @@ func (h *HTTPHandler) servePHP(w *httpRecorder, r *http.Request, route httpRoute
 		}
 		body = http.MaxBytesReader(w, r.Body, h.cfg.MaxBodySize)
 	}
-	if contentLength < 0 {
-		// php-cgi reads exactly CONTENT_LENGTH bytes, so a chunked body is
-		// buffered to learn its length.
-		b, err := io.ReadAll(body)
+	if contentLength != 0 {
+		buffered, size, cleanup, err := httpBufferBody(body)
 		if err != nil {
 			status := http.StatusBadRequest
 			if errors.As(err, new(*http.MaxBytesError)) {
@@ -284,7 +282,8 @@ func (h *HTTPHandler) servePHP(w *httpRecorder, r *http.Request, route httpRoute
 			http.Error(w, http.StatusText(status), status)
 			return false
 		}
-		body, contentLength = bytes.NewReader(b), int64(len(b))
+		defer cleanup()
+		body, contentLength = buffered, size
 	}
 
 	vars := h.env(r, route, contentLength)
@@ -438,3 +437,40 @@ func (rec *httpRecorder) Write(b []byte) (int, error) {
 
 // Unwrap lets http.ResponseController reach the underlying writer.
 func (rec *httpRecorder) Unwrap() http.ResponseWriter { return rec.ResponseWriter }
+
+// httpBodyMemory is how much of a request body httpBufferBody keeps in
+// memory. The rest goes to a temporary file.
+const httpBodyMemory = 1 << 20
+
+// httpBufferBody reads a whole request body before PHP runs, as nginx does
+// by default (proxy_request_buffering). PHP reads every byte of
+// CONTENT_LENGTH before it ends a request, so a client that sent its body
+// slowly would hold a PHP instance as long as it liked. It also gives a
+// chunked body the length that php-cgi needs.
+func httpBufferBody(body io.Reader) (io.Reader, int64, func(), error) {
+	var buf bytes.Buffer
+	n, err := io.CopyN(&buf, body, httpBodyMemory+1)
+	if err == io.EOF {
+		return bytes.NewReader(buf.Bytes()), n, func() {}, nil
+	}
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	f, err := os.CreateTemp("", "gophper-body-*")
+	if err != nil {
+		return nil, 0, nil, err
+	}
+	cleanup := func() {
+		f.Close()
+		os.Remove(f.Name())
+	}
+	rest, err := io.Copy(f, io.MultiReader(&buf, body))
+	if err == nil {
+		_, err = f.Seek(0, io.SeekStart)
+	}
+	if err != nil {
+		cleanup()
+		return nil, 0, nil, err
+	}
+	return f, rest, cleanup, nil
+}

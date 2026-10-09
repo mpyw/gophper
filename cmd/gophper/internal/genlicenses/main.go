@@ -15,9 +15,12 @@ import (
 	"strings"
 )
 
-// systems are the systems whose builds are covered. Some modules,
-// such as golang.org/x/sys/windows, are linked on one system only.
-var systems = []string{"linux", "darwin", "windows", "freebsd"}
+// systems and arches are the builds covered. Some modules, such as
+// golang.org/x/sys/windows, are linked on one system only.
+var (
+	systems = []string{"linux", "darwin", "windows", "freebsd"}
+	arches  = []string{"amd64", "arm64"}
+)
 
 var licenseFile = regexp.MustCompile(`(?i)^(licen[cs]e|copying|notice|patents)([.-].*)?$`)
 
@@ -35,18 +38,9 @@ func main() {
 func run() error {
 	mods := map[string]module{}
 	for _, goos := range systems {
-		cmd := exec.Command("go", "list", "-deps", "-f",
-			`{{with .Module}}{{if not .Main}}{{.Path}}	{{.Version}}	{{with .Replace}}{{.Dir}}{{else}}{{.Dir}}{{end}}{{end}}{{end}}`, ".")
-		cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH=amd64")
-		cmd.Stderr = os.Stderr
-		out, err := cmd.Output()
-		if err != nil {
-			return fmt.Errorf("go list for %s: %w", goos, err)
-		}
-		for line := range strings.Lines(string(out)) {
-			f := strings.Split(strings.TrimSpace(line), "\t")
-			if len(f) == 3 {
-				mods[f[0]] = module{f[0], f[1], f[2]}
+		for _, goarch := range arches {
+			if err := listModules(mods, goos, goarch); err != nil {
+				return err
 			}
 		}
 	}
@@ -78,6 +72,26 @@ func run() error {
 		return err
 	}
 	return os.WriteFile("modlicenses.txt.gz", gz.Bytes(), 0o644)
+}
+
+// listModules adds the modules linked into a build to mods. A go.work
+// would change them, so it is ignored, as it is for go install.
+func listModules(mods map[string]module, goos, goarch string) error {
+	cmd := exec.Command("go", "list", "-deps", "-f",
+		`{{with .Module}}{{if not .Main}}{{.Path}}	{{.Version}}	{{with .Replace}}{{.Dir}}{{else}}{{.Dir}}{{end}}{{end}}{{end}}`, ".")
+	cmd.Env = append(os.Environ(), "GOOS="+goos, "GOARCH="+goarch, "GOWORK=off")
+	cmd.Stderr = os.Stderr
+	out, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("go list for %s/%s: %w", goos, goarch, err)
+	}
+	for line := range strings.Lines(string(out)) {
+		f := strings.Split(strings.TrimSpace(line), "\t")
+		if len(f) == 3 {
+			mods[f[0]] = module{f[0], f[1], f[2]}
+		}
+	}
+	return nil
 }
 
 // appendLicenses writes the license files at the root of dir under a

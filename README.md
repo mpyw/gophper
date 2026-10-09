@@ -95,7 +95,7 @@ Requests are routed like Caddy's `php_server`:
 | `--front-controller FILE` | Runs for paths that are not files. `off` answers 404. Default: `index.php` |
 | `--split-path SUFFIX` | Ends a script's path, before `PATH_INFO`. Repeatable. Default: `.php` |
 | `--no-static` | Answers files other than scripts with 404 |
-| `--max-body SIZE` | Limits request bodies, such as `64M`. `0` means no limit. Default: `64M` |
+| `--max-body SIZE` | Limits request bodies, such as `64M`. `0` means no limit. Default: `64M`. A body is read in full before PHP runs, as nginx does. Beyond 1 MiB, it waits in a file in the system's temporary directory. With `0`, that file can grow without limit. |
 | `--domain NAME` | Serves HTTPS with a Let's Encrypt certificate. Also listens on `:80` for the challenge. |
 | `--tls-cert FILE`, `--tls-key FILE` | Serves HTTPS with these files |
 
@@ -206,7 +206,7 @@ example.com {
 | `front_controller FILE \| off` | `--front-controller` |
 | `file_server off` | `--no-static`, as in FrankenPHP |
 | `max_body SIZE \| off` | `--max-body` |
-| `php_ini_file FILE` | `-c` |
+| `php_ini_file FILE` | `-c`. A relative path is from Caddy's working directory, as for `root`. |
 | `php_ini KEY VALUE` | `-d` |
 
 To build your own Caddy, import `github.com/mpyw/gophper/caddy`. It registers the `http.handlers.gophper` module.

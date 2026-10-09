@@ -20,8 +20,9 @@ import (
 	"github.com/mpyw/gophper"
 )
 
-// pool runs php-cgi for FastCGIServer and HTTPHandler: one fresh instance
-// per request, at most Concurrency at a time, with the same mounts and
+// pool runs php-cgi for FastCGIServer and HTTPHandler: on workers that
+// serve one request after another, or with NoWorkers on a fresh instance
+// per request. At most Concurrency run at a time, with the same mounts and
 // php.ini for every request.
 //
 //declscope:shared // http.go and fastcgi.go serve requests through it

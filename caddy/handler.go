@@ -15,9 +15,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"os"
 	"path/filepath"
-	"strings"
 	"sync"
 	"time"
 
@@ -110,11 +108,11 @@ var handlerEngine = sync.OnceValues(func() (*gophper.Engine, error) {
 func (h *Handler) Provision(ctx caddy.Context) error {
 	ini := h.INI
 	if h.INIFile != "" {
-		b, err := os.ReadFile(h.INIFile)
+		var err error
+		ini, err = server.MergeINIFile(h.INIFile, h.INI)
 		if err != nil {
 			return fmt.Errorf("php.ini: %w", err)
 		}
-		ini = append(strings.Split(string(b), "\n"), h.INI...)
 	}
 	engine, err := handlerEngine()
 	if err != nil {
