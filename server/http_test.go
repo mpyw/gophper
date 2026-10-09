@@ -85,6 +85,7 @@ func TestHTTPRouting(t *testing.T) {
 		{"/sub", "301", ""},
 		{"/created", "201", "created\n"},
 		{"/redirect", "302", ""},
+		{"/location-200", "302", ""},
 		{"/bad-status", "502", ""},
 		{"/text-status", "200", ""},
 		{"/space-status", "502", ""},

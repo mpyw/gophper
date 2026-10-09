@@ -473,3 +473,13 @@ func TestEngineCompile(t *testing.T) {
 		t.Errorf("after Close: %v", err)
 	}
 }
+
+// TestEngineRunCanceledFirst does not start PHP for a ctx done before the
+// run: it reports the ctx's error.
+func TestEngineRunCanceledFirst(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := newTestEngine(t).RunCLI(ctx, gophper.Options{Args: []string{"-r", "echo 1;"}}); !errors.Is(err, context.Canceled) {
+		t.Errorf("err = %v", err)
+	}
+}

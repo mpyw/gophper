@@ -15,6 +15,13 @@ if ($path === '/bad-status') {
     header('Status: 42 Nonsense');
     exit;
 }
+if ($path === '/location-200') {
+    // A Location with the status put back to 200: php-cgi then sends no
+    // Status, and the server makes it a redirect, as CGI does.
+    header('Location: /target');
+    http_response_code(200);
+    exit;
+}
 if ($path === '/text-status') {
     // Not a number: the status stays 200.
     header('Status: none');

@@ -3,18 +3,22 @@
 package main
 
 import (
+	"context"
 	"crypto/ecdsa"
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/pem"
+	"errors"
+	"io"
 	"math/big"
 	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -123,4 +127,38 @@ func serveTestCertificate(t *testing.T) (cert, key string) {
 		t.Fatal(err)
 	}
 	return cert, key
+}
+
+// mainBrokenWriter fails every write after the first n, as a stdout whose
+// reader went away.
+type mainBrokenWriter struct{ n int }
+
+func (w *mainBrokenWriter) Write(p []byte) (int, error) {
+	if w.n == 0 {
+		return 0, errors.New("broken pipe")
+	}
+	w.n--
+	return len(p), nil
+}
+
+// TestMainWriteErrors reports a failed write to stdout, at each point it
+// can fail, rather than printing on as if all went out.
+func TestMainWriteErrors(t *testing.T) {
+	dir := t.TempDir()
+	for _, tt := range []struct {
+		args []string
+		n    int
+	}{
+		{[]string{"licenses"}, 0},
+		{[]string{"licenses"}, 1},
+		{[]string{"extension", "list"}, 0},
+		{[]string{"--extension-dir", dir, "extension", "install", "intl"}, 0},
+		{[]string{"--extension-dir", dir, "extension", "install", "intl"}, 1},
+	} {
+		cmd := newRootCommand()
+		cmd.Writer, cmd.ErrWriter = &mainBrokenWriter{n: tt.n}, io.Discard
+		if err := cmd.Run(context.Background(), append([]string{"gophper"}, tt.args...)); err == nil || !strings.Contains(err.Error(), "broken pipe") {
+			t.Errorf("%v after %d writes: %v", tt.args, tt.n, err)
+		}
+	}
 }

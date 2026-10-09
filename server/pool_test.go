@@ -353,3 +353,18 @@ func TestPoolWorkerStartTimeout(t *testing.T) {
 		t.Errorf("%d workers left", len(p.workers.all))
 	}
 }
+
+// TestPoolRunAfterClose starts no worker for a request after the pool
+// closed: it fails, and nothing is left running.
+func TestPoolRunAfterClose(t *testing.T) {
+	p, vars := poolForTest(t)
+	if err := p.close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := p.run(context.Background(), vars, nil, io.Discard, io.Discard); err == nil || !strings.Contains(err.Error(), "closed") {
+		t.Errorf("err = %v", err)
+	}
+	if len(p.workers.all) != 0 {
+		t.Errorf("%d workers", len(p.workers.all))
+	}
+}

@@ -250,3 +250,30 @@ func TestSignalsTakenAtWake(t *testing.T) {
 		t.Errorf("canceled %v, terminated %d", run.canceled.Load(), s.Terminated())
 	}
 }
+
+// TestSignalsGraceLosesToTake fires a grace timer while take holds the
+// lock, as when the guest takes the signal just as its grace runs out. The
+// timer finds itself taken, and ends nothing.
+func TestSignalsGraceLosesToTake(t *testing.T) {
+	signalGrace = time.Millisecond
+	defer func() { signalGrace = 5 * time.Second }()
+	run := newTestRun(context.Background())
+	s := NewSignals(run)
+	defer s.Stop()
+	s.mu.Lock()
+	s.handled = 0
+	s.mu.Unlock()
+	s.Deliver(10)
+	// Hold the lock past the grace, so the timer waits for it, then take
+	// the signal as take does, before letting go.
+	s.mu.Lock()
+	time.Sleep(50 * time.Millisecond)
+	s.grace[10].Stop()
+	delete(s.grace, 10)
+	s.pending = 0
+	s.mu.Unlock()
+	time.Sleep(50 * time.Millisecond)
+	if run.canceled.Load() || s.Terminated() != 0 {
+		t.Errorf("canceled %v, terminated %d", run.canceled.Load(), s.Terminated())
+	}
+}

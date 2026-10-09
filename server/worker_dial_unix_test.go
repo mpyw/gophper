@@ -62,3 +62,33 @@ func TestPoolDialBeforeListen(t *testing.T) {
 		t.Error("connected to nothing")
 	}
 }
+
+// TestPoolDialWorkerExited stops trying a worker that exited while its
+// connection was refused, rather than waiting until it must listen.
+func TestPoolDialWorkerExited(t *testing.T) {
+	dir, err := os.MkdirTemp("/tmp", "gophper")
+	if err != nil {
+		t.Skip(err)
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	// Bound but not listening: connecting is refused.
+	sock := filepath.Join(dir, "w.sock")
+	fd, err := syscall.Socket(syscall.AF_UNIX, syscall.SOCK_STREAM, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = syscall.Close(fd) }() // the test is over
+	if err := syscall.Bind(fd, &syscall.SockaddrUnix{Name: sock}); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	close(done)
+	w := &poolWorker{sock: sock, done: done, listenBy: time.Now().Add(time.Minute)}
+	start := time.Now()
+	if _, err := (&pool{}).poolDial(w); err == nil {
+		t.Error("connected to a socket that does not listen")
+	}
+	if d := time.Since(start); d > 10*time.Second {
+		t.Errorf("took %s", d)
+	}
+}
