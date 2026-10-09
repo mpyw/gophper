@@ -7,6 +7,8 @@ package hostproc
 import (
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 	"syscall"
 )
 
@@ -20,7 +22,8 @@ func processShell(path string, argv []string) (*exec.Cmd, bool) {
 	if path != "/bin/sh" || len(argv) != 3 || argv[1] != "-c" {
 		return nil, false
 	}
-	if sh, err := exec.LookPath("sh"); err == nil {
+	// A program: a sh.bat would hand the line to cmd.exe unchecked.
+	if sh, err := exec.LookPath("sh"); err == nil && strings.EqualFold(filepath.Ext(sh), ".exe") {
 		return &exec.Cmd{Path: sh, Args: []string{"sh", "-c", argv[2]}}, true
 	}
 	comspec := os.Getenv("ComSpec")

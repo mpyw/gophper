@@ -306,3 +306,46 @@ func TestProcessStreamedStdin(t *testing.T) {
 		t.Fatal("proc_close waited for stdin")
 	}
 }
+
+// TestProcessFileStdin starts a child that does not read the instance's
+// stdin, which is a file. The child shares the file, as with a real fd, so
+// what it did not read is still there for PHP.
+func TestProcessFileStdin(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pr, pw, err := os.Pipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = pr.Close() }() // read in full by then
+	if _, err := pw.WriteString("hello"); err != nil {
+		t.Fatal(err)
+	}
+	if err := pw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	_, err = newTestEngine(t).RunCLI(context.Background(), gophper.Options{
+		Args: []string{"-r", fmt.Sprintf(`
+			$p = proc_open([%q, "-test.run=^$"], [1 => ["pipe", "w"], 2 => ["pipe", "w"]], $pipes);
+			stream_get_contents($pipes[1]);
+			proc_close($p);
+			var_dump(stream_get_contents(STDIN));`, gophper.HostToGuest(exe))},
+		Stdin:     pr,
+		Stdout:    &out,
+		Stderr:    &out,
+		Dir:       gophper.HostToGuest(wd),
+		FS:        gophper.HostFS(),
+		HostPath:  gophper.HostPaths,
+		Processes: true,
+	})
+	if err != nil || out.String() != "string(5) \"hello\"\n" {
+		t.Errorf("%q, %v", out.String(), err)
+	}
+}

@@ -26,3 +26,6 @@ func processExecutable(path string) (string, bool) {
 // processBatchSafe reports whether name can start with args. Only Windows
 // has batch files, which cmd.exe runs.
 func processBatchSafe(string, []string) bool { return true }
+
+// processFinalPath is the file the host runs for path: path itself.
+func processFinalPath(path string) (string, error) { return path, nil }

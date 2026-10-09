@@ -64,6 +64,9 @@ func TestProcessBatchSafe(t *testing.T) {
 		{`C:\x\run.bat`, []string{"run", "100%"}, false},
 		{`C:\x\run.bat`, []string{"run", "a\nb"}, false},
 		{`C:\x\git.exe`, []string{"git", "commit", "-m", "a & b"}, true},
+		{`C:\x\run.bat.`, []string{"run", "x & calc"}, false},
+		{`C:\x\run.bat `, []string{"run", "x & calc"}, false},
+		{`C:\x\tool.ps1`, []string{"tool", "x & calc"}, false},
 	} {
 		if got := processBatchSafe(tt.name, tt.args); got != tt.want {
 			t.Errorf("processBatchSafe(%q, %q) = %v, want %v", tt.name, tt.args, got, tt.want)

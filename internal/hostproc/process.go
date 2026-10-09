@@ -168,6 +168,12 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 				return errnoFrom(err)
 			}
 		}
+		// What Windows runs: os/exec would add an extension later, past
+		// the check below.
+		name, err := processFinalPath(name)
+		if err != nil {
+			return errnoFrom(err)
+		}
 		if !processBatchSafe(name, argv) {
 			return wasi.EINVAL
 		}
@@ -179,10 +185,16 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 	cmd.Env, cmd.Dir = env, cwd
 
 	var release []func()
-	// feeds are the write ends of the pipes a child reads, closed once it
-	// exits.
-	var feeds []*os.File
+	// feeds are the pipes a child reads. Their write ends close once it
+	// exits, or here if it never started.
+	var feeds []processFeed
+	started := false
 	defer func() {
+		if !started {
+			for _, f := range feeds {
+				_ = f.w.Close() // no child to feed
+			}
+		}
 		for _, r := range release {
 			r()
 		}
@@ -234,23 +246,17 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 		if f != nil {
 			r, w = f, f
 		}
-		if r != nil && f == nil {
+		if _, isFile := r.(*os.File); r != nil && !isFile {
 			// Not a file: os/exec would copy it in a goroutine that Wait
 			// waits for, so exec() would return only at the next input.
-			// The child gets a pipe instead, fed until it exits.
+			// The child gets a pipe instead, fed once it has started. A
+			// file, such as the CLI's terminal, goes to the child as it is.
 			pr, pw, err := os.Pipe()
 			if err != nil {
 				return errnoFrom(err)
 			}
 			release = append(release, func() { _ = pr.Close() }) // the child has its own copy
-			feeds = append(feeds, pw)
-			go func(r io.Reader) {
-				// Fails once the child is gone and pw is closed. What the
-				// last read took then goes nowhere, as it would have in
-				// the child.
-				_, _ = io.Copy(pw, r)
-				_ = pw.Close() // EOF for the child; a second close changes nothing
-			}(r)
+			feeds = append(feeds, processFeed{r: r, w: pw})
 			r = pr
 		}
 
@@ -274,10 +280,17 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 	}
 
 	if err := cmd.Start(); err != nil {
-		for _, f := range feeds {
-			_ = f.Close() // no child to feed
-		}
 		return errnoFrom(err)
+	}
+	started = true
+	for _, f := range feeds {
+		go func() {
+			// Fails once the child is gone and the pipe is closed. A read
+			// already waiting for input then takes it, as the child would
+			// have.
+			_, _ = io.Copy(f.w, f.r)
+			_ = f.w.Close() // EOF for the child; a second close changes nothing
+		}()
 	}
 	pid := int32(cmd.Process.Pid)
 	c := &processChild{cmd: cmd}
@@ -289,7 +302,7 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 		// adds nothing the guest can see.
 		_ = cmd.Wait()
 		for _, f := range feeds {
-			_ = f.Close() // the child is gone; a feeder still writing stops
+			_ = f.w.Close() // the child is gone; a feeder still writing stops
 		}
 		p.mu.Lock()
 		defer p.mu.Unlock()
@@ -465,6 +478,12 @@ func processWaitStatus(ps *os.ProcessState) int32 {
 		return sig & 0x7f
 	}
 	return int32(ps.ExitCode()&0xff) << 8
+}
+
+// processFeed copies what a child reads to the pipe it reads from.
+type processFeed struct {
+	r io.Reader
+	w *os.File
 }
 
 // processGuardedReader is the instance's stdin as children see it.

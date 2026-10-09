@@ -6,6 +6,7 @@ package hostproc
 
 import (
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 )
@@ -54,9 +55,10 @@ func processExecutable(path string) (string, bool) {
 // would start another command (BatBadBut, CVE-2024-1874 in PHP). Such an
 // argument is refused.
 func processBatchSafe(name string, args []string) bool {
-	switch strings.ToLower(filepath.Ext(name)) {
-	case ".bat", ".cmd":
-	default:
+	// Windows drops trailing dots and spaces: run.bat. is run.bat. Only a
+	// program, not a script cmd.exe would read, gets its arguments as is.
+	switch strings.ToLower(filepath.Ext(strings.TrimRight(name, ". "))) {
+	case ".exe", ".com":
 		return true
 	}
 	for _, a := range args {
@@ -65,4 +67,10 @@ func processBatchSafe(name string, args []string) bool {
 		}
 	}
 	return true
+}
+
+// processFinalPath is the file Windows runs for path: os/exec.Cmd.Start
+// would try the extensions of PATHEXT itself, after any check of the name.
+func processFinalPath(path string) (string, error) {
+	return exec.LookPath(path)
 }
