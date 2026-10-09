@@ -7,17 +7,30 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
 // TestPHPBinaryScriptFallback writes the script in a private directory of
 // the temporary directory, and refuses one that others can write to.
 func TestPHPBinaryScriptFallback(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no PHP_BINARY on Windows")
-	}
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
+	if runtime.GOOS == "windows" {
+		// The profile's temporary directory, with php.exe and its options.
+		t.Setenv("TMP", tmp)
+		path, err := phpBinaryScript("", []string{"--no-cache"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rel, err := filepath.Rel(filepath.Join(tmp, "gophper"), path); err != nil || strings.HasPrefix(rel, "..") || filepath.Base(path) != "php.exe" {
+			t.Errorf("%q is not php.exe under %q", path, tmp)
+		}
+		if b, err := os.ReadFile(filepath.Join(filepath.Dir(path), phpBinaryArgsFile)); err != nil || string(b) != "--no-cache\n" {
+			t.Errorf("options %q, %v", b, err)
+		}
+		return
+	}
 	path, err := phpBinaryScript("", nil)
 	if err != nil {
 		t.Fatal(err)
@@ -57,9 +70,6 @@ func TestPHPBinaryScriptFallback(t *testing.T) {
 
 // TestPHPBinaryScriptErrors fails where the directory cannot be made.
 func TestPHPBinaryScriptErrors(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("no PHP_BINARY on Windows")
-	}
 	file := filepath.Join(t.TempDir(), "file")
 	if err := os.WriteFile(file, nil, 0o600); err != nil {
 		t.Fatal(err)
@@ -67,6 +77,9 @@ func TestPHPBinaryScriptErrors(t *testing.T) {
 	// A cache directory that is a file.
 	if _, err := phpBinaryScript(file, nil); err == nil {
 		t.Error("a file as the cache directory was accepted")
+	}
+	if runtime.GOOS == "windows" {
+		return // Windows makes the temporary directory's gophper as it goes.
 	}
 	// No temporary directory.
 	t.Setenv("TMPDIR", filepath.Join(file, "tmp"))

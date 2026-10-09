@@ -281,19 +281,50 @@ func TestCLIPHPName(t *testing.T) {
 }
 
 // TestCLIPHPBinary starts PHP again through PHP_BINARY, as Composer does.
+// TestCLIPHPBinary starts PHP again through PHP_BINARY, on every OS. It has
+// no shell, as Composer starts it, and the global options must come along:
+// without them, the child would not find the extension. With --no-cache,
+// PHP_BINARY goes in the temporary directory instead of the cache.
 func TestCLIPHPBinary(t *testing.T) {
-	// Without a shell, as Composer starts it: the global options must come
-	// along, or the child would not find the extension.
 	ext := t.TempDir()
 	if _, errOut, code := cliRun(t, t.TempDir(), "", "--extension-dir", ext, "extension", "install", "dl_test"); code != 0 {
 		t.Fatalf("install: exit %d: %s", code, errOut)
 	}
-	out, errOut, code := cliRun(t, t.TempDir(), "", "--extension-dir", ext, "php", "-r", `
-		$p = proc_open([PHP_BINARY, "-d", "extension=dl_test", "-r", 'echo 6 * 7, " ", extension_loaded("dl_test") ? "loaded" : "missing";'], [1 => ["pipe", "w"]], $pipes);
-		echo stream_get_contents($pipes[1]);
-		exit(proc_close($p));`)
-	if code != 0 || out != "42 loaded" {
-		t.Errorf("exit %d: %q %s", code, out, errOut)
+	for _, noCache := range []bool{false, true} {
+		t.Run(fmt.Sprintf("no cache %v", noCache), func(t *testing.T) {
+			args := []string{"--extension-dir", ext}
+			tmp := t.TempDir()
+			if noCache {
+				args = append(args, "--no-cache")
+			}
+			cmd := cliCommand(t, t.TempDir(), append(args, "php", "-r", `
+				$p = proc_open([PHP_BINARY, "-d", "extension=dl_test", "-r", 'echo 6 * 7, " ", extension_loaded("dl_test") ? "loaded" : "missing";'], [1 => ["pipe", "w"]], $pipes);
+				echo stream_get_contents($pipes[1]), "|", PHP_BINARY;
+				exit(proc_close($p));`)...)
+			// os.TempDir reads TMPDIR on Unix, and TMP on Windows.
+			cmd.Env = append(cmd.Env, "TMPDIR="+tmp, "TMP="+tmp, "TEMP="+tmp)
+			var out, errOut bytes.Buffer
+			cmd.Stdout, cmd.Stderr = &out, &errOut
+			if err := cmd.Run(); err != nil {
+				t.Fatalf("%v: %s", err, errOut.String())
+			}
+			result, binary, _ := strings.Cut(out.String(), "|")
+			if result != "42 loaded" {
+				t.Errorf("%q %s", out.String(), errOut.String())
+			}
+			want := cliCacheDir
+			if noCache {
+				want = tmp
+			}
+			// PHP resolves PHP_BINARY with realpath, as macOS's /var is a link.
+			if real, err := filepath.EvalSymlinks(want); err == nil {
+				want = real
+			}
+			// A guest path: compare it with the host's, as PHP sees it.
+			if !strings.HasPrefix(strings.ToLower(binary), strings.ToLower(gophper.HostToGuest(want))+"/") {
+				t.Errorf("PHP_BINARY %q is not under %q", binary, gophper.HostToGuest(want))
+			}
+		})
 	}
 }
 
@@ -424,7 +455,7 @@ func TestCLIServeModes(t *testing.T) {
 // then goes in the temporary directory, which must be private.
 func TestCLINoCache(t *testing.T) {
 	if runtime.GOOS == "windows" {
-		t.Skip("no PHP_BINARY on Windows")
+		t.Skip("Windows' temporary directory is the user's own, with no mode to check")
 	}
 	dir := t.TempDir()
 	tmp := t.TempDir()
