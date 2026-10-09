@@ -60,6 +60,23 @@ func (h *Handler) UnmarshalCaddyfile(d *caddyfile.Dispenser) error {
 			h.Router, err = one()
 		case "temp_dir":
 			h.TempDir, err = one()
+		case "opcache":
+			var v string
+			if v, err = one(); err == nil {
+				if v == "off" {
+					h.NoOpcache = true
+				} else {
+					h.OpcacheDir = v
+				}
+			}
+		case "processes":
+			var v string
+			if v, err = one(); err == nil {
+				if v != "off" {
+					return d.Errf("processes: want off, got %q", v)
+				}
+				h.NoProcesses = true
+			}
 		case "mount":
 			switch {
 			case len(args) == 1:

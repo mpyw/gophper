@@ -33,6 +33,12 @@ type pool struct {
 	//declscope:private
 	mounts []Mount
 	//declscope:private
+	tempDir string
+	//declscope:private
+	opcacheDir string
+	//declscope:private
+	processes bool
+	//declscope:private
 	env []string
 	//declscope:private
 	iniDir string
@@ -67,6 +73,17 @@ var poolINI = []string{
 	"variables_order=GPCS",
 }
 
+// poolOpcacheDir is where OpcacheDir is mounted.
+const poolOpcacheDir = "/var/cache/gophper/opcache"
+
+// poolOpcacheINI turns on opcache with only its file cache. Shared memory
+// would be thrown away with each instance.
+var poolOpcacheINI = []string{
+	"opcache.enable=1",
+	"opcache.file_cache=" + poolOpcacheDir,
+	"opcache.file_cache_only=1",
+}
+
 // poolBootstrapDir is where php.ini and the extra files are mounted.
 const poolBootstrapDir = "/etc/gophper"
 
@@ -92,6 +109,28 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 		}
 	}
 
+	var opcacheDir string
+	var opcacheINI []string
+	if !cfg.NoOpcache {
+		opcacheDir = cfg.OpcacheDir
+		if opcacheDir == "" {
+			base, err := os.UserCacheDir()
+			if err != nil {
+				return nil, fmt.Errorf("opcache directory: %w", err)
+			}
+			opcacheDir = filepath.Join(base, "gophper", "opcache")
+		}
+		// opcache's system id does not tell two builds of one PHP release
+		// apart. A script compiled by the other would be rejected, compiled
+		// again on every request, and never written over.
+		opcacheDir = filepath.Join(opcacheDir, engine.BuildID())
+		// Compiled scripts are code: only this user may write them.
+		if err := os.MkdirAll(opcacheDir, 0o700); err != nil {
+			return nil, fmt.Errorf("opcache directory: %w", err)
+		}
+		opcacheINI = poolOpcacheINI
+	}
+
 	// php-cgi reads /etc/gophper/php.ini by default (--with-config-file-path),
 	// so no PHPRC is needed. It is not passed through -d either: php-cgi
 	// skips its arguments when QUERY_STRING starts with "-".
@@ -103,7 +142,7 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 	if files == nil {
 		files = map[string]string{}
 	}
-	files["php.ini"] = strings.Join(slices.Concat(poolINI, cfg.INI), "\n") + "\n"
+	files["php.ini"] = strings.Join(slices.Concat(poolINI, opcacheINI, cfg.INI), "\n") + "\n"
 	for name, content := range files {
 		if err := os.WriteFile(filepath.Join(iniDir, name), []byte(content), 0o644); err != nil {
 			os.RemoveAll(iniDir)
@@ -120,18 +159,24 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 		}
 	}
 	fs = fs.WithDirMount(tempDir, "/tmp").WithReadOnlyDirMount(iniDir, poolBootstrapDir)
+	if opcacheDir != "" {
+		fs = fs.WithDirMount(opcacheDir, poolOpcacheDir)
+	}
 
 	p := &pool{
-		engine:    engine,
-		fs:        fs,
-		mounts:    cfg.Mounts,
-		env:       cfg.Env,
-		iniDir:    iniDir,
-		sem:       make(chan struct{}, concurrency),
-		maxWait:   cfg.MaxWaitTime,
-		errorLog:  cfg.ErrorLog,
-		accessLog: cfg.AccessLog,
-		started:   time.Now(),
+		engine:     engine,
+		fs:         fs,
+		mounts:     cfg.Mounts,
+		tempDir:    tempDir,
+		opcacheDir: opcacheDir,
+		processes:  !cfg.NoProcesses,
+		env:        cfg.Env,
+		iniDir:     iniDir,
+		sem:        make(chan struct{}, concurrency),
+		maxWait:    cfg.MaxWaitTime,
+		errorLog:   cfg.ErrorLog,
+		accessLog:  cfg.AccessLog,
+		started:    time.Now(),
 	}
 	if p.errorLog == nil {
 		p.errorLog = os.Stderr
@@ -196,7 +241,27 @@ func (p *pool) run(ctx context.Context, vars map[string]string, stdin io.Reader,
 	for k, v := range vars {
 		env = append(env, k+"="+v)
 	}
-	return p.engine.RunCGI(ctx, gophper.Options{Env: env, Stdin: stdin, Stdout: stdout, Stderr: stderr, FS: p.fs})
+	return p.engine.RunCGI(ctx, gophper.Options{
+		Env: env, Stdin: stdin, Stdout: stdout, Stderr: stderr, FS: p.fs,
+		HostPath: p.hostPath, Processes: p.processes,
+	})
+}
+
+// hostPath maps a path inside PHP to the host, as the mounts do.
+func (p *pool) hostPath(path string) (string, bool, bool) {
+	if rel, ok := strings.CutPrefix(path, "/tmp"); ok && (rel == "" || rel[0] == '/') {
+		return filepath.Join(p.tempDir, rel), true, true
+	}
+	if rel, ok := strings.CutPrefix(path, poolOpcacheDir); ok && p.opcacheDir != "" && (rel == "" || rel[0] == '/') {
+		return filepath.Join(p.opcacheDir, rel), true, true
+	}
+	// The last mount wins, as in the FS config.
+	for _, m := range slices.Backward(p.mounts) {
+		if m.contains(path) {
+			return path, !m.ReadOnly, true
+		}
+	}
+	return "", false, false
 }
 
 // logAccess writes a Common Log Format line, plus the time taken.

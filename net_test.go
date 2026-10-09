@@ -20,7 +20,7 @@ import (
 	"github.com/mpyw/gophper"
 )
 
-// runPHP runs code with the host file system mounted, as the CLI does.
+// runPHP runs code with the host file system mounted and host access, as the CLI does.
 //
 //declscope:shared // net_test.go and database_test.go
 func runPHP(t *testing.T, code string) (string, int) {
@@ -31,6 +31,9 @@ func runPHP(t *testing.T, code string) (string, int) {
 		Stdout: &out,
 		Stderr: &out,
 		FS:     wazero.NewFSConfig().WithDirMount("/", "/"),
+		// As the CLI: the host's root is mounted at "/".
+		HostPath:  func(path string) (string, bool, bool) { return path, true, true },
+		Processes: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -250,4 +253,23 @@ func TestSocketConnectTimeout(t *testing.T) {
 		t.Errorf("got\n%s", out)
 	}
 	t.Logf("errstr: %s", strings.TrimSpace(out[strings.LastIndex(out, "string("):]))
+}
+
+// TestSocketDNSRecords queries the host's name servers. It needs the
+// internet, and skips without it.
+func TestSocketDNSRecords(t *testing.T) {
+	if _, err := net.LookupMX("gmail.com"); err != nil {
+		t.Skipf("no DNS: %v", err)
+	}
+	out, code := runPHP(t, `
+		var_export([
+			checkdnsrr("gmail.com", "MX"),
+			getmxrr("gmail.com", $mx) && count($mx) > 0,
+			dns_get_record("gmail.com", DNS_MX)[0]["type"] ?? null,
+			checkdnsrr("no-such-host.invalid", "A"),
+		]);
+	`)
+	if want := "array (\n  0 => true,\n  1 => true,\n  2 => 'MX',\n  3 => false,\n)"; code != 0 || out != want {
+		t.Errorf("exit %d\n%s", code, out)
+	}
 }

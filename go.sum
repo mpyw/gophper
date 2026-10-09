@@ -260,8 +260,8 @@ github.com/mitchellh/go-ps v1.0.0/go.mod h1:J4lOc8z8yJs6vUwklHw2XEIiT4z4C40KtWVN
 github.com/mitchellh/mapstructure v1.1.2/go.mod h1:FVVH3fgwuzCH5S8UJGiWEs2h04kUh9fWfEaFds41c1Y=
 github.com/mitchellh/reflectwalk v1.0.2 h1:G2LzWKi524PWgd3mLHV8Y5k7s6XUvT0Gef6zxSIeXaQ=
 github.com/mitchellh/reflectwalk v1.0.2/go.mod h1:mSTlrgnPZtwu0c4WaC2kGObEpuNDbx0jmZXqmk4esnw=
-github.com/mpyw/gophper-wasm v0.2.0 h1:GE8oL16Y64ldA8mNIlXoaY4wHJD1buv/Q6vL024Js9A=
-github.com/mpyw/gophper-wasm v0.2.0/go.mod h1:vmUCyEihOMWt+3VIBdDJB0ipwIWMYTW9AiyFcNF2gmU=
+github.com/mpyw/gophper-wasm v0.3.0 h1:J2gcrJJPRuQywO/t4XUIctqKvTAGh6pd1HdL4jgjtBg=
+github.com/mpyw/gophper-wasm v0.3.0/go.mod h1:vmUCyEihOMWt+3VIBdDJB0ipwIWMYTW9AiyFcNF2gmU=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822 h1:C3w9PqII01/Oq1c1nUAm88MOHcQC9l5mIlSMApZMrHA=
 github.com/munnerz/goautoneg v0.0.0-20191010083416-a7dc8b61c822/go.mod h1:+n7T8mK8HuQTcFwEeznm/DIxMOiR9yIdICNftLE1DvQ=
 github.com/nlnwa/whatwg-url v0.6.2 h1:jU61lU2ig4LANydbEJmA2nPrtCGiKdtgT0rmMd2VZ/Q=

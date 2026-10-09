@@ -12,8 +12,10 @@ import (
 	"github.com/tetratelabs/wazero/experimental"
 
 	"github.com/mpyw/gophper/internal/dylink"
+	"github.com/mpyw/gophper/internal/hostfn"
 	"github.com/mpyw/gophper/internal/hostnet"
 	"github.com/mpyw/gophper/internal/hostproc"
+	"github.com/mpyw/gophper/internal/hostsys"
 )
 
 // engineInstance is the host side of one running PHP instance.
@@ -32,8 +34,12 @@ import (
 // sockets, stops only when that function returns.
 type engineInstance struct {
 	ctx       context.Context
+	cancel    context.CancelFunc
+	signals   engineSignals
 	sockets   *hostnet.Sockets
 	processes *hostproc.Processes
+	system    *hostsys.System
+	functions *hostfn.Functions
 	linker    *dylink.Linker
 	memory    engineMemory
 
@@ -46,10 +52,21 @@ type engineInstance struct {
 	interrupted chan struct{}
 }
 
-func newEngineInstance(ctx context.Context, extensions *dylink.Cache, opts Options) *engineInstance {
-	inst := &engineInstance{ctx: ctx, interrupted: make(chan struct{}), linker: dylink.NewLinker(extensions)}
+func newEngineInstance(ctx context.Context, cancel context.CancelFunc, extensions *dylink.Cache, opts Options) *engineInstance {
+	inst := &engineInstance{ctx: ctx, cancel: cancel, interrupted: make(chan struct{}), linker: dylink.NewLinker(extensions)}
+	inst.signals.changed = make(chan struct{})
 	inst.sockets = hostnet.NewSockets(inst)
-	inst.processes = hostproc.NewProcesses(inst, inst.sockets, opts.Stdin, opts.Stdout, opts.Stderr)
+	hostPath := opts.HostPath
+	if hostPath == nil {
+		hostPath = func(string) (string, bool, bool) { return "", false, false }
+	}
+	inst.processes = hostproc.NewProcesses(inst, inst.sockets, opts.Processes, hostproc.ProcessesHostPath(hostPath), opts.Stdin, opts.Stdout, opts.Stderr)
+	inst.system = hostsys.NewSystem(inst, hostsys.SystemHostPath(hostPath))
+	fns := make(map[string]hostfn.Function, len(opts.Functions))
+	for name, fn := range opts.Functions {
+		fns[name] = hostfn.Function(fn)
+	}
+	inst.functions = hostfn.NewFunctions(ctx, fns)
 	return inst
 }
 
@@ -141,6 +158,12 @@ func (i *engineInstance) fire() {
 // interrupt makes the VM raise "Maximum execution time exceeded" at its next check.
 func (i *engineInstance) interrupt() {
 	i.memory.writeByte(i.timedOut, 1)
+	i.wake()
+}
+
+// wake makes the VM call zend_interrupt_function at its next check, and
+// cuts blocking host calls short, as a signal would.
+func (i *engineInstance) wake() {
 	i.memory.writeByte(i.vmInterrupt, 1)
 	i.mu.Lock()
 	close(i.interrupted)
@@ -170,6 +193,14 @@ func (i *engineInstance) interruptUntil(done <-chan struct{}) {
 func (i *engineInstance) nanosleep(ns int64) {
 	// Taken before sleeping, so an earlier interrupt does not cut this one short.
 	intr := i.Interruption()
+	// A signal that arrived just before is not in intr. The guest takes it
+	// at its next interrupt check, so sleeping now would delay its handler.
+	i.signals.mu.Lock()
+	pending := i.signals.pending
+	i.signals.mu.Unlock()
+	if pending != 0 {
+		return
+	}
 	t := time.NewTimer(time.Duration(ns))
 	defer t.Stop()
 	select {

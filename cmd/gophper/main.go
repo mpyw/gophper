@@ -35,7 +35,7 @@ import (
 	"golang.org/x/crypto/acme/autocert"
 
 	"github.com/mpyw/gophper"
-	_ "github.com/mpyw/gophper/caddy"
+	gophpercaddy "github.com/mpyw/gophper/caddy"
 	"github.com/mpyw/gophper/server"
 )
 
@@ -159,6 +159,21 @@ func phpFlags() []cli.Flag {
 			Name:    "mount",
 			Usage:   "directory PHP may access, at the same path inside PHP; DIR or DIR:ro (repeatable, default: the current directory)",
 			Sources: env("MOUNT"),
+		},
+		&cli.StringFlag{
+			Name:    "opcache-dir",
+			Usage:   "where opcache keeps compiled scripts between requests (default: the user cache directory)",
+			Sources: env("OPCACHE_DIR"),
+		},
+		&cli.BoolFlag{
+			Name:    "no-opcache",
+			Usage:   "leave opcache off",
+			Sources: env("NO_OPCACHE"),
+		},
+		&cli.BoolFlag{
+			Name:    "no-processes",
+			Usage:   "stop PHP from starting host programs (proc_open, exec and the rest)",
+			Sources: env("NO_PROCESSES"),
 		},
 		&cli.StringFlag{
 			Name:    "temp-dir",
@@ -318,6 +333,15 @@ func keyValues(flag string) func([]string) error {
 }
 
 func newEngine(ctx context.Context, cmd *cli.Command) (*gophper.Engine, error) {
+	cfg, err := engineConfig(cmd)
+	if err != nil {
+		return nil, err
+	}
+	return gophper.NewEngine(ctx, cfg)
+}
+
+// engineConfig reads the global options.
+func engineConfig(cmd *cli.Command) (gophper.EngineConfig, error) {
 	cfg := gophper.EngineConfig{CacheDir: cmd.String("cache-dir")}
 	// The global options again, for PHP_BINARY's script.
 	var global []string
@@ -327,7 +351,7 @@ func newEngine(ctx context.Context, cmd *cli.Command) (*gophper.Engine, error) {
 	} else if cfg.CacheDir != "" {
 		abs, err := filepath.Abs(cfg.CacheDir)
 		if err != nil {
-			return nil, err
+			return gophper.EngineConfig{}, err
 		}
 		cfg.CacheDir = abs
 		global = append(global, "--cache-dir", abs)
@@ -335,7 +359,7 @@ func newEngine(ctx context.Context, cmd *cli.Command) (*gophper.Engine, error) {
 	if dir := cmd.String("extension-dir"); dir != "" {
 		abs, err := filepath.Abs(dir)
 		if err != nil {
-			return nil, err
+			return gophper.EngineConfig{}, err
 		}
 		cfg.ExtensionDir = abs
 		global = append(global, "--extension-dir", abs)
@@ -346,7 +370,7 @@ func newEngine(ctx context.Context, cmd *cli.Command) (*gophper.Engine, error) {
 		fmt.Fprintf(cmd.Root().ErrWriter, "gophper: PHP_BINARY: %v\n", err)
 	}
 	cfg.PHPBinary = bin
-	return gophper.NewEngine(ctx, cfg)
+	return cfg, nil
 }
 
 // phpConfig reads the options in phpFlags. The returned function closes
@@ -354,6 +378,9 @@ func newEngine(ctx context.Context, cmd *cli.Command) (*gophper.Engine, error) {
 func phpConfig(cmd *cli.Command) (server.PHPConfig, func(), error) {
 	cfg := server.PHPConfig{
 		TempDir:     cmd.String("temp-dir"),
+		NoProcesses: cmd.Bool("no-processes"),
+		OpcacheDir:  cmd.String("opcache-dir"),
+		NoOpcache:   cmd.Bool("no-opcache"),
 		Concurrency: int(cmd.Int("concurrency")),
 		MaxWaitTime: cmd.Duration("max-wait-time"),
 		Env:         cmd.StringSlice("env"),
@@ -406,14 +433,24 @@ func phpAction(ctx context.Context, cmd *cli.Command) error {
 		return err
 	}
 	defer engine.Close(context.Background())
-	code, err := engine.RunCLI(ctx, gophper.Options{
+	// Signals go to PHP, as to a native php: pcntl handlers run, and the
+	// rest end the script as their default action would. So the run does
+	// not stop with ctx, which main cancels on the first SIGINT.
+	signals := make(chan os.Signal, 8)
+	signal.Notify(signals, phpSignals...)
+	defer signal.Stop(signals)
+	code, err := engine.RunCLI(context.WithoutCancel(ctx), gophper.Options{
 		Args:   cmd.Args().Slice(),
-		Env:    os.Environ(),
+		Env:    phpBinaryEnv(os.Environ()),
 		Dir:    wd,
 		Stdin:  os.Stdin,
 		Stdout: os.Stdout,
 		Stderr: os.Stderr,
 		FS:     wazero.NewFSConfig().WithDirMount("/", "/"),
+		// The host's root is mounted at "/", so paths are the same.
+		HostPath:  func(path string) (string, bool, bool) { return path, true, true },
+		Processes: true,
+		Signals:   signals,
 	})
 	if err != nil {
 		return err
@@ -618,6 +655,11 @@ func extensionInstallAction(_ context.Context, cmd *cli.Command) error {
 }
 
 func caddyAction(_ context.Context, cmd *cli.Command) error {
+	cfg, err := engineConfig(cmd)
+	if err != nil {
+		return err
+	}
+	gophpercaddy.HandlerEngineConfig = func() gophper.EngineConfig { return cfg }
 	os.Args = append([]string{"gophper caddy"}, cmd.Args().Slice()...)
 	caddycmd.Main()
 	return nil

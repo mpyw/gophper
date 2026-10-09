@@ -30,6 +30,26 @@ func processHostSignal(sig int32) (os.Signal, bool) {
 	return nil, false
 }
 
+// ProcessSignalNumber returns the Linux number of a host signal, as the
+// guest numbers signals.
+func ProcessSignalNumber(sig os.Signal) (int32, bool) {
+	s, ok := sig.(syscall.Signal)
+	if !ok {
+		return 0, false
+	}
+	for n, hs := range processSignalByLinux {
+		if hs == s {
+			return n, true
+		}
+	}
+	for n, hs := range processSignalByLinuxUnix {
+		if hs == s {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
 // processExitSignal returns the Linux number of the signal that ended a process.
 func processExitSignal(ps *os.ProcessState) (int32, bool) {
 	ws, ok := ps.Sys().(syscall.WaitStatus)

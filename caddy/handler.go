@@ -56,6 +56,12 @@ type Handler struct {
 	TempDir string `json:"temp_dir,omitempty"`
 	// Concurrency limits PHP instances at once. Default: the number of CPUs.
 	Concurrency int `json:"concurrency,omitempty"`
+	// NoProcesses stops PHP from starting host programs (proc_open, exec).
+	NoProcesses bool `json:"no_processes,omitempty"`
+	// OpcacheDir keeps compiled scripts between requests. Default: the user cache directory.
+	OpcacheDir string `json:"opcache_dir,omitempty"`
+	// NoOpcache leaves opcache off.
+	NoOpcache bool `json:"no_opcache,omitempty"`
 	// MaxWaitTime is how long a request waits for a free instance before 503.
 	MaxWaitTime caddy.Duration `json:"max_wait_time,omitempty"`
 	// INI holds php.ini lines such as "max_execution_time=30".
@@ -80,10 +86,15 @@ func (Handler) CaddyModule() caddy.ModuleInfo {
 	}
 }
 
+// HandlerEngineConfig configures the engine every handler shares. A program
+// that embeds Caddy may set it before Caddy starts, as "gophper caddy" does
+// to set PHPBinary.
+var HandlerEngineConfig = gophper.DefaultEngineConfig
+
 // handlerEngine is shared by every handler and every config reload.
 // Compiling the PHP binaries takes seconds, so it happens once per process.
 var handlerEngine = sync.OnceValues(func() (*gophper.Engine, error) {
-	return gophper.NewEngine(context.Background(), gophper.DefaultEngineConfig())
+	return gophper.NewEngine(context.Background(), HandlerEngineConfig())
 })
 
 // Provision prepares the handler.
@@ -100,6 +111,9 @@ func (h *Handler) Provision(ctx caddy.Context) error {
 		PHPConfig: server.PHPConfig{
 			TempDir:     h.TempDir,
 			Concurrency: h.Concurrency,
+			NoProcesses: h.NoProcesses,
+			OpcacheDir:  h.OpcacheDir,
+			NoOpcache:   h.NoOpcache,
 			MaxWaitTime: time.Duration(h.MaxWaitTime),
 			INI:         h.INI,
 			Env:         h.Env,

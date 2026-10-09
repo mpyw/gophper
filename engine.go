@@ -18,12 +18,14 @@ import (
 	"github.com/tetratelabs/wazero/sys"
 
 	"github.com/mpyw/gophper/internal/dylink"
+	"github.com/mpyw/gophper/internal/hostfn"
 	"github.com/mpyw/gophper/internal/hostnet"
 	"github.com/mpyw/gophper/internal/hostproc"
+	"github.com/mpyw/gophper/internal/hostsys"
 )
 
 // engineABIVersion is the phpwasm.ABIVersion this host implements.
-const engineABIVersion = 4
+const engineABIVersion = 5
 
 // Engine compiles the PHP binaries once and runs them many times.
 // It is safe for concurrent use. Each run gets a fresh PHP instance.
@@ -67,6 +69,7 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 	}
 	host := e.runtime.NewHostModuleBuilder("gophper")
 	host.NewFunctionBuilder().WithFunc(engineSetTimeout).Export("set_timeout")
+	engineExportSignals(host)
 	hostnet.ExportSockets(host, func(ctx context.Context) *hostnet.Sockets {
 		if inst := engineInstanceFrom(ctx); inst != nil {
 			return inst.sockets
@@ -85,6 +88,18 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 		}
 		return nil
 	})
+	hostsys.ExportSystem(host, func(ctx context.Context) *hostsys.System {
+		if inst := engineInstanceFrom(ctx); inst != nil {
+			return inst.system
+		}
+		return nil
+	})
+	hostfn.ExportFunctions(host, func(ctx context.Context) *hostfn.Functions {
+		if inst := engineInstanceFrom(ctx); inst != nil {
+			return inst.functions
+		}
+		return nil
+	})
 	hostnet.ExportDNS(host, func(ctx context.Context) hostnet.Run {
 		if inst := engineInstanceFrom(ctx); inst != nil {
 			return inst
@@ -98,9 +113,9 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 
 	// Compilation must outlive the ctx of the first run that triggers it.
 	compileCtx := context.WithoutCancel(ctx)
-	compile := func(name string, bin func() ([]byte, error)) func() (wazero.CompiledModule, error) {
+	compile := func(name string, bin func() ([]byte, error), digest string) func() (wazero.CompiledModule, error) {
 		return sync.OnceValues(func() (wazero.CompiledModule, error) {
-			b, err := bin()
+			b, err := engineBinary(cfg.CacheDir, bin, digest)
 			if err != nil {
 				return nil, fmt.Errorf("decompress %s: %w", name, err)
 			}
@@ -114,9 +129,45 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 			return m, nil
 		})
 	}
-	e.cliModule = compile("php.wasm", phpwasm.CLI)
-	e.cgiModule = compile("php-cgi.wasm", phpwasm.CGI)
+	e.cliModule = compile("php.wasm", phpwasm.CLI, phpwasm.CLIDigest)
+	e.cgiModule = compile("php-cgi.wasm", phpwasm.CGI, phpwasm.CGIDigest)
 	return e, nil
+}
+
+// BuildID identifies the PHP binaries this Engine runs. Two builds of the
+// same PHP release differ in it, while opcache's own system id stays the
+// same. A cache of compiled scripts belongs under it.
+func (e *Engine) BuildID() string {
+	return phpwasm.CLIDigest + phpwasm.CGIDigest
+}
+
+// engineBinary returns a decompressed binary. With a cache directory, it
+// keeps the result there under its digest: reading 16 MB takes a few
+// milliseconds, and decompressing it about a hundred.
+func engineBinary(cacheDir string, bin func() ([]byte, error), digest string) ([]byte, error) {
+	if cacheDir == "" {
+		return bin()
+	}
+	path := filepath.Join(cacheDir, "wasm", digest+".wasm")
+	if b, err := os.ReadFile(path); err == nil && len(b) > 0 {
+		return b, nil
+	}
+	b, err := bin()
+	if err != nil {
+		return nil, err
+	}
+	// Best effort: a failure only means decompressing next time too. The
+	// rename keeps a concurrent reader from seeing half a file.
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err == nil {
+		if f, err := os.CreateTemp(filepath.Dir(path), ".wasm-*"); err == nil {
+			_, werr := f.Write(b)
+			if cerr := f.Close(); werr == nil && cerr == nil {
+				os.Rename(f.Name(), path)
+			}
+			os.Remove(f.Name())
+		}
+	}
+	return b, nil
 }
 
 // Close releases the runtime and the compilation cache.
@@ -145,9 +196,12 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 	if err != nil {
 		return 0, err
 	}
-	inst := newEngineInstance(ctx, e.dylink, opts)
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	inst := newEngineInstance(ctx, cancel, e.dylink, opts)
 	defer inst.sockets.Close()
 	defer inst.processes.Close()
+	defer inst.system.Close()
 	defer inst.linker.Close(context.WithoutCancel(ctx))
 
 	fs := opts.FS
@@ -215,11 +269,22 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 	done := make(chan struct{})
 	defer close(done)
 	defer context.AfterFunc(ctx, func() { inst.interruptUntil(done) })()
+	defer inst.setAlarm(0)
+	if opts.Signals != nil {
+		go inst.forwardSignals(opts.Signals, done)
+	}
 
 	_, err = m.ExportedFunction("_start").Call(context.WithValue(ctx, engineInstanceKey{}, inst))
 	code := 0
 	if exitErr := (*sys.ExitError)(nil); errors.As(err, &exitErr) {
 		code, err = int(exitErr.ExitCode()), nil
+	}
+	inst.signals.mu.Lock()
+	terminated := inst.signals.terminated
+	inst.signals.mu.Unlock()
+	if terminated != 0 {
+		// Ended by a signal's default action, as a shell reports it.
+		return 128 + int(terminated), nil
 	}
 	if err == nil && ctx.Err() != nil {
 		err = ctx.Err()

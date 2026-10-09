@@ -138,6 +138,9 @@ location ~ \.php(/|$) {
 | --- | --- | --- |
 | `--mount DIR[:ro]` | A directory PHP may access, at the same path. Repeatable. Default: the current directory | |
 | `--temp-dir DIR` | Mounted at `/tmp` inside PHP. Default: the system's | |
+| `--no-processes` | Stops PHP from starting host programs (`proc_open`, `exec` and the rest) | `disable_functions` |
+| `--opcache-dir DIR` | Where opcache keeps compiled scripts between requests. Default: the user cache directory | |
+| `--no-opcache` | Leaves opcache off | `opcache.enable=0` |
 | `--concurrency N` | PHP instances at once. Default: the number of CPUs | `pm.max_children` |
 | `--max-wait-time DURATION` | How long a request waits for a free instance before 503. Default: no limit | |
 | `-c FILE` | A php.ini file. `-d` entries come after it. | |
@@ -149,6 +152,10 @@ location ~ \.php(/|$) {
 > PHP sees only `--mount` directories, `/tmp` and its own php.ini.
 > The host environment is not passed to PHP, as with php-fpm's `clear_env`.
 > The default php.ini sets `variables_order=GPCS`, as `php.ini-production` does.
+
+> [!WARNING]
+> A child process runs outside the mounts, with the rights of the server.
+> PHP may start one by default, as with php-fpm. Use `--no-processes` to stop it.
 
 ### Caddy
 
@@ -179,6 +186,8 @@ example.com {
 | Subdirective | Same as |
 | --- | --- |
 | `root`, `router`, `index`, `split_path`, `temp_dir`, `concurrency`, `max_wait_time`, `env` | The `serve` options |
+| `processes off` | `--no-processes` |
+| `opcache DIR \| off` | `--opcache-dir`, or `--no-opcache` |
 | `mount DIR [ro]` | `--mount DIR[:ro]` |
 | `front_controller FILE \| off` | `--front-controller` |
 | `file_server off` | `--no-static`, as in FrankenPHP |
@@ -224,8 +233,15 @@ Your own extensions go in the same directory.
 > A native `.so` does not load.
 > Build it against the same php-src version and configuration as gophper's PHP.
 
-> [!NOTE]
-> Only `dl_test`, php-src's test extension, comes with gophper so far.
+These come with gophper:
+
+| Extension | What it adds |
+| --- | --- |
+| `curl` | libcurl, with HTTPS through the same OpenSSL |
+| `gd` | Images, with PNG and JPEG |
+| `sodium` | libsodium |
+| `zip` | `ZipArchive`, with AES encryption |
+| `dl_test` | php-src's extension for testing `dl()` |
 
 ### From Go
 
@@ -249,8 +265,39 @@ code, err := engine.RunCLI(ctx, gophper.Options{
 | `github.com/mpyw/gophper/server` | `HTTPHandler`, an `http.Handler`, and `FastCGIServer`. Both take a `PHPConfig`. |
 | `github.com/mpyw/gophper/caddy` | The Caddy module. Only a program that imports it links Caddy. |
 
-`DefaultEngineConfig` keeps wazero's compiled code in a per-user cache directory.
-With the cache, `gophper php -r 'echo 1;'` takes about 0.07 seconds.
+PHP can call functions written in Go:
+
+```go
+code, err := engine.RunCLI(ctx, gophper.Options{
+	Args:   []string{"-r", `echo go_add(20, 22), "\n";`},
+	Stdout: os.Stdout,
+	Functions: map[string]gophper.Function{
+		"go_add": func(ctx context.Context, args []any) (any, error) {
+			return args[0].(int64) + args[1].(int64), nil
+		},
+	},
+})
+```
+
+| PHP | Go |
+| --- | --- |
+| `null`, `bool`, `int`, `float`, `string` | `nil`, `bool`, `int64`, `float64`, `string` |
+| An array with the keys 0 to n-1 | `[]any` |
+| Any other array, or an object | `map[string]any` |
+| An exception (`RuntimeException`) | A returned `error` |
+
+PHP gets nothing of the host unless `Options` says so:
+
+| Field | Meaning | Zero value |
+| --- | --- | --- |
+| `FS` | The directories PHP sees | No file system |
+| `HostPath` | Maps a path inside PHP to its host file, for permissions, owners, locks and child processes | No path has a host file |
+| `Processes` | PHP may start host programs | `proc_open` and the rest fail |
+| `Signals` | Signals for PHP, as from `signal.Notify`. Handled ones run the `pcntl` handler. The rest end the run with exit code 128 plus the signal number. | No signals |
+
+`DefaultEngineConfig` keeps a per-user cache directory: wazero's compiled code, and the PHP binaries decompressed.
+With the cache, `gophper php -r 'echo 1;'` takes about 0.18 seconds.
+Most of it is wazero validating the 16 MB binary, which it does even with the cache.
 
 ## What works
 
@@ -259,6 +306,8 @@ With the cache, `gophper php -r 'echo 1;'` takes about 0.07 seconds.
 | Language (enums, generators, property hooks, pipe operator, ...) | Works |
 | Fatal errors, `exit()`, shutdown functions | Works |
 | `max_execution_time`, `set_time_limit()` | Works. The timer runs in Go, since WASI has no signals. |
+| `pcntl`: signals, `pcntl_alarm()`, `pcntl_waitpid()` | Works. `gophper php` passes `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGUSR1` and others to PHP, so `artisan queue:work` stops cleanly. `pcntl_fork()` fails. `pcntl_exec()` runs the program as a child and exits with its status. |
+| opcache | `serve` and `fcgi` keep compiled scripts in a file cache, since each request is a fresh instance. The CLI leaves opcache off, as native PHP does. |
 | Sockets | Tested: TCP clients and servers, UDP and Unix clients, `stream_select`, and the `http://` wrapper |
 | DNS | Works, through Go's resolver |
 | `date`, `pcre`, `hash`, `json`, `random`, `spl`, `uri`, `lexbor` | Works |
@@ -269,10 +318,13 @@ With the cache, `gophper php -r 'echo 1;'` takes about 0.07 seconds.
 | Fibers | Throws `Fibers are not supported on this platform`. |
 | `proc_open`, `exec`, `shell_exec`, `system`, `passthru`, `popen` | Works. Children are host processes, started with Go's `os/exec`. Pipes, `socket` descriptors, files, the environment and the working directory are passed. |
 | `PHP_BINARY` | Runs `gophper php` again, with the same global options. Composer and `artisan` start PHP this way. |
-| `posix_*` | Partly. Everything runs as uid 0, and there is no user database. |
+| `posix_*`, users and groups | Works. They are the host's: the uid gophper runs as, and its user database. |
+| `flock`, `chmod`, `chown`, `fileperms`, `fileowner`, `is_executable` | Works, on the host file. WASI itself has no permissions or locks. |
+| `dns_get_record`, `checkdnsrr`, `getmxrr` | Works. The host queries the name servers in `/etc/resolv.conf`. |
 | Other built-in extensions | bcmath, calendar, ctype, exif, fileinfo, filter, iconv, mbstring, Phar, posix, session, tokenizer |
 | Loading extensions at runtime | Works. See [Extensions](#extensions). |
-| Other extensions (`curl`, `intl`, `gd`, `zip`, `pgsql`, ...) | Not built yet |
+| `curl`, `gd`, `sodium`, `zip` | Load at runtime. See [Extensions](#extensions). |
+| Other extensions (`intl`, `pgsql`, `redis`, ...) | Not built yet |
 
 > [!NOTE]
 > A script blocked reading a socket is not stopped by `max_execution_time`.
@@ -296,3 +348,10 @@ FastCGI, for a small JSON page with 4 workers:
 | Parallel | 1.1 ms (about 930 requests per second) |
 
 Each request runs in a fresh PHP instance.
+
+Laravel 13's welcome page with `gophper serve`, one request at a time:
+
+| opcache | Time per request |
+| --- | --- |
+| Off (`--no-opcache`) | 160 ms |
+| File cache (the default) | 100 ms |

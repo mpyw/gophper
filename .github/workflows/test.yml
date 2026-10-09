@@ -1,0 +1,57 @@
+name: test
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: test-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      GOPRIVATE: github.com/mpyw/*
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+
+      # github.com/mpyw/gophper-wasm is private. GOPHPER_WASM_TOKEN is a
+      # token that may read it.
+      - name: Allow access to gophper-wasm
+        env:
+          TOKEN: ${{ secrets.GOPHPER_WASM_TOKEN }}
+        run: |
+          if [ -z "$TOKEN" ]; then
+            echo "::error::Set the GOPHPER_WASM_TOKEN secret: a token that can read mpyw/gophper-wasm."
+            exit 1
+          fi
+          git config --global url."https://x-access-token:${TOKEN}@github.com/mpyw/".insteadOf "https://github.com/mpyw/"
+
+      - uses: jdx/mise-action@v4
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Test
+        run: go test ./...
+
+      - name: Lint
+        run: golangci-lint run ./...
+
+      - name: declscope
+        run: declscope ./... && declscope shrink ./...

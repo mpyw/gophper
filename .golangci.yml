@@ -63,6 +63,8 @@ linters:
             - github.com/mpyw/gophper/internal/dylink$
             - github.com/mpyw/gophper/internal/hostnet$
             - github.com/mpyw/gophper/internal/hostproc$
+            - github.com/mpyw/gophper/internal/hostsys$
+            - github.com/mpyw/gophper/internal/hostfn$
 
         # Package server: HTTP and FastCGI on top of the Engine's public API.
         server:
@@ -135,6 +137,24 @@ linters:
             - $gostd
             - github.com/tetratelabs/wazero
             - github.com/mpyw/gophper/internal/hostnet$
+
+        # PHP functions written in Go.
+        hostfn:
+          list-mode: strict
+          files:
+            - "**/internal/hostfn/*.go"
+          allow:
+            - $gostd
+            - github.com/tetratelabs/wazero
+
+        # Users, file locks and the host name for the guest.
+        hostsys:
+          list-mode: strict
+          files:
+            - "**/internal/hostsys/*.go"
+          allow:
+            - $gostd
+            - github.com/tetratelabs/wazero
 
         dylink:
           list-mode: strict

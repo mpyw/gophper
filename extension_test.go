@@ -13,17 +13,20 @@ import (
 	"github.com/mpyw/gophper"
 )
 
-// newExtensionEngine returns an Engine whose ExtensionDir holds dl_test.so,
-// php-src's extension for testing dl().
+// newExtensionEngine returns an Engine whose ExtensionDir holds every
+// extension that comes with gophper-wasm, such as dl_test, php-src's
+// extension for testing dl().
 func newExtensionEngine(t *testing.T) *gophper.Engine {
 	t.Helper()
-	so, err := phpext.Open("dl_test")
-	if err != nil {
-		t.Fatal(err)
-	}
 	dir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(dir, "dl_test.so"), so, 0o644); err != nil {
-		t.Fatal(err)
+	for _, name := range phpext.Names() {
+		so, err := phpext.Open(name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name+".so"), so, 0o644); err != nil {
+			t.Fatal(err)
+		}
 	}
 	cfg := gophper.DefaultEngineConfig()
 	cfg.ExtensionDir = dir
@@ -100,5 +103,17 @@ func TestExtensionNotSharedLibrary(t *testing.T) {
 	out, _ := runExtension(t, e, "-d", "extension=plain", "-r", `echo "still runs\n";`)
 	if !strings.Contains(out, "not a shared library") || !strings.Contains(out, "still runs") {
 		t.Errorf("got\n%s", out)
+	}
+}
+
+// TestExtensionBundled loads every extension that comes with gophper-wasm.
+func TestExtensionBundled(t *testing.T) {
+	for _, name := range phpext.Names() {
+		t.Run(name, func(t *testing.T) {
+			out, code := runExtension(t, newExtensionEngine(t), "-d", "extension="+name, "-r", `echo extension_loaded("`+name+`") ? "loaded" : "missing";`)
+			if code != 0 || out != "loaded" {
+				t.Errorf("exit %d\n%s", code, out)
+			}
+		})
 	}
 }

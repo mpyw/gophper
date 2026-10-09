@@ -19,6 +19,7 @@ const (
 	errnoEIO     int32 = 29
 	errnoENOENT  int32 = 44
 	errnoENOEXEC int32 = 45
+	errnoEPERM   int32 = 63
 	errnoESRCH   int32 = 71
 )
 

@@ -51,13 +51,19 @@ func ExportProcesses(b wazero.HostModuleBuilder, from func(context.Context) *Pro
 	b.NewFunctionBuilder().WithFunc(x.kill).Export("proc_kill")
 }
 
+// ProcessesHostPath maps a path inside PHP to the host file behind it, and
+// tells whether PHP may write it. See gophper.Options.HostPath.
+type ProcessesHostPath func(path string) (host string, writable, ok bool)
+
 // Processes holds the children of one PHP instance.
 type Processes struct {
-	run     hostnet.Run
-	sockets *hostnet.Sockets
-	stdin   *processGuardedReader
-	stdout  *processGuardedWriter
-	stderr  *processGuardedWriter
+	run      hostnet.Run
+	sockets  *hostnet.Sockets
+	allowed  bool
+	hostPath ProcessesHostPath
+	stdin    *processGuardedReader
+	stdout   *processGuardedWriter
+	stderr   *processGuardedWriter
 
 	mu       sync.Mutex
 	children map[int32]*processChild
@@ -65,13 +71,16 @@ type Processes struct {
 	changed chan struct{}
 }
 
-// NewProcesses returns an empty table for one PHP instance. stdin, stdout
-// and stderr are the instance's own. A child given one of them gets it until
-// Close, even when it outlives the instance.
-func NewProcesses(run hostnet.Run, sockets *hostnet.Sockets, stdin io.Reader, stdout, stderr io.Writer) *Processes {
+// NewProcesses returns an empty table for one PHP instance. Unless allowed,
+// every spawn fails with EPERM. stdin, stdout and stderr are the instance's
+// own. A child given one of them gets it until Close, even when it outlives
+// the instance.
+func NewProcesses(run hostnet.Run, sockets *hostnet.Sockets, allowed bool, hostPath ProcessesHostPath, stdin io.Reader, stdout, stderr io.Writer) *Processes {
 	return &Processes{
 		run:      run,
 		sockets:  sockets,
+		allowed:  allowed,
+		hostPath: hostPath,
 		stdin:    &processGuardedReader{r: stdin},
 		stdout:   &processGuardedWriter{w: stdout},
 		stderr:   &processGuardedWriter{w: stderr},
@@ -106,6 +115,9 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 	fdsPtr uint32, nfds int32, pidPtr uint32,
 ) int32 {
 	p := x.from(ctx)
+	if !p.allowed {
+		return errnoEPERM
+	}
 	mem := m.Memory()
 	read := func(ptr, n uint32) string {
 		b, _ := mem.Read(ptr, n)
@@ -114,7 +126,11 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 	path := read(pathPtr, pathLen)
 	argv := processSplitNUL(read(argvPtr, argvLen))
 	env := processSplitNUL(read(envpPtr, envpLen))
-	cwd := read(cwdPtr, cwdLen)
+	cwd, _, ok := p.hostPath(read(cwdPtr, cwdLen))
+	if !ok {
+		// The working directory has no host directory behind it.
+		return errnoENOENT
+	}
 
 	name, err := processResolve(path, search != 0, cwd, env)
 	if err != nil {
@@ -159,7 +175,14 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 				return errnoEBADF
 			}
 		case processChildFile:
-			of, err := os.OpenFile(fpath, processOpenFlags(flags), 0o666)
+			host, writable, ok := p.hostPath(fpath)
+			switch {
+			case !ok:
+				return errnoEBADF
+			case !writable && flags&processOpenWrite != 0:
+				return errnoEACCES
+			}
+			of, err := os.OpenFile(host, processOpenFlags(flags), 0o666)
 			if err != nil {
 				return errnoFrom(err)
 			}

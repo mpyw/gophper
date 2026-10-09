@@ -17,6 +17,7 @@ func ExportDNS(b wazero.HostModuleBuilder, from func(context.Context) Run) {
 	x := dnsExports{from: from}
 	b.NewFunctionBuilder().WithFunc(x.lookup).Export("dns_lookup")
 	b.NewFunctionBuilder().WithFunc(x.reverse).Export("dns_reverse")
+	b.NewFunctionBuilder().WithFunc(x.query).Export("dns_query")
 }
 
 type dnsExports struct {
