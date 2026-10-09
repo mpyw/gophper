@@ -156,6 +156,7 @@ linters:
             - github.com/tetratelabs/wazero
             - github.com/mpyw/gophper/internal/hostnet$
             - github.com/mpyw/gophper/internal/wasi$
+            - github.com/mpyw/gophper/internal/hostpath$
 
         # PHP functions written in Go.
         hostfn:

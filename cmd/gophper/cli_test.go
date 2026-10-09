@@ -301,8 +301,9 @@ func TestCLIPHPBinary(t *testing.T) {
 				$p = proc_open([PHP_BINARY, "-d", "extension=dl_test", "-r", 'echo 6 * 7, " ", extension_loaded("dl_test") ? "loaded" : "missing";'], [1 => ["pipe", "w"]], $pipes);
 				echo stream_get_contents($pipes[1]), "|", PHP_BINARY;
 				exit(proc_close($p));`)...)
-			// os.TempDir reads TMPDIR on Unix, and TMP on Windows.
-			cmd.Env = append(cmd.Env, "TMPDIR="+tmp, "TMP="+tmp, "TEMP="+tmp)
+			// Without the cache: TMPDIR on Unix, and the user's local
+			// application data on Windows.
+			cmd.Env = append(cmd.Env, "TMPDIR="+tmp, "LOCALAPPDATA="+tmp)
 			var out, errOut bytes.Buffer
 			cmd.Stdout, cmd.Stderr = &out, &errOut
 			if err := cmd.Run(); err != nil {
@@ -322,7 +323,7 @@ func TestCLIPHPBinary(t *testing.T) {
 			// The same directory may be spelled two ways: macOS's /var is a
 			// link to /private/var, and Windows has 8.3 short names, such as
 			// RUNNER~1. So the file is looked for in want instead.
-			rel := binary[strings.Index(binary, "/bin/")+1:]
+			rel := binary[strings.LastIndex(binary, "/bin/")+1:]
 			if !strings.Contains(binary, "/bin/") {
 				t.Fatalf("PHP_BINARY %q is in no bin directory", binary)
 			}
@@ -341,6 +342,9 @@ func TestCLIPHPBinary(t *testing.T) {
 // beside it, as phpBinaryScript leaves it on Windows. The options in the
 // file come before the php subcommand.
 func TestCLIAsPHPWithOptions(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("only Windows reads gophper.args")
+	}
 	dir := t.TempDir()
 	name := "php"
 	if runtime.GOOS == "windows" {

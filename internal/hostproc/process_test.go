@@ -275,7 +275,7 @@ func TestProcessWithBinDir(t *testing.T) {
 	}{
 		{"no dir", []string{"A=1"}, "", []string{"A=1"}},
 		{"before PATH", []string{"A=1", "PATH=/x"}, "/bin/php", []string{"A=1", "PATH=/bin/php" + sep + "/x"}},
-		{"no PATH", []string{"A=1"}, "/bin/php", []string{"A=1", "PATH=/bin/php" + sep + "/usr/local/bin:/usr/bin:/bin"}},
+		{"no PATH", []string{"A=1"}, "/bin/php", []string{"A=1", strings.TrimSuffix("PATH=/bin/php"+sep+processDefaultPath, sep)}},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := processWithBinDir(slices.Clone(tt.env), tt.dir); !slices.Equal(got, tt.want) {

@@ -68,8 +68,13 @@ func phpBinaryBase(cacheDir string) (string, error) {
 		return cacheDir, nil
 	}
 	if runtime.GOOS == "windows" {
-		// The temporary directory is the user's own, in the profile.
-		return filepath.Join(os.TempDir(), "gophper"), nil
+		// TMP may name a directory others share, such as C:\Windows\Temp
+		// for a service. The user's own local application data is private.
+		base, err := os.UserCacheDir()
+		if err != nil {
+			return "", err
+		}
+		return filepath.Join(base, "gophper"), nil
 	}
 	base := filepath.Join(os.TempDir(), fmt.Sprintf("gophper-%d", os.Getuid()))
 	// Anyone can create this name first, and then replace the script
@@ -91,6 +96,13 @@ func phpBinaryBase(cacheDir string) (string, error) {
 // phpBinaryExe links or copies exe to php.exe, in a directory of its own
 // for each build of gophper and each set of options.
 func phpBinaryExe(base, exe string, args []string) (string, error) {
+	content := phpBinaryArgsText(args)
+	// Already one: a php.exe that starts PHP again is the same program.
+	if filepath.Base(exe) == "php.exe" {
+		if b, err := os.ReadFile(filepath.Join(filepath.Dir(exe), phpBinaryArgsFile)); err == nil && string(b) == content {
+			return exe, nil
+		}
+	}
 	fi, err := os.Stat(exe)
 	if err != nil {
 		return "", err
@@ -100,19 +112,20 @@ func phpBinaryExe(base, exe string, args []string) (string, error) {
 	sum := sha256.Sum256([]byte(key))
 	dir := filepath.Join(base, "bin", hex.EncodeToString(sum[:8]))
 	path := filepath.Join(dir, "php.exe")
-	if _, err := os.Stat(path); err == nil {
+	argsPath := filepath.Join(dir, phpBinaryArgsFile)
+	// What is there is used only if it is this gophper, with these options.
+	if phpBinarySame(exe, path) && phpBinaryHas(argsPath, content) {
 		return path, nil
 	}
-	// The options first: a php.exe that exists has them.
-	if err := phpBinaryWrite(filepath.Join(dir, phpBinaryArgsFile), 0o644, func(w io.Writer) error {
-		for _, a := range args {
-			if _, err := io.WriteString(w, a+"\n"); err != nil {
-				return err
-			}
+	// The options first: a php.exe that exists has them. A php.exe that
+	// runs may be reading them, so equal ones are left as they are.
+	if !phpBinaryHas(argsPath, content) {
+		if err := phpBinaryWrite(argsPath, 0o644, func(w io.Writer) error {
+			_, err := io.WriteString(w, content)
+			return err
+		}); err != nil && !phpBinaryHas(argsPath, content) {
+			return "", err
 		}
-		return nil
-	}); err != nil {
-		return "", err
 	}
 	tmp := filepath.Join(dir, ".php-"+strconv.Itoa(os.Getpid())+".exe")
 	if err := os.Link(exe, tmp); err != nil {
@@ -125,12 +138,39 @@ func phpBinaryExe(base, exe string, args []string) (string, error) {
 		// Gone after a successful rename; otherwise only a stray file.
 		_ = os.Remove(tmp)
 		// Another run made it first, and it may be running already.
-		if _, serr := os.Stat(path); serr == nil {
+		if phpBinarySame(exe, path) {
 			return path, nil
 		}
 		return "", err
 	}
 	return path, nil
+}
+
+// phpBinaryArgsText is the content of phpBinaryArgsFile for args.
+func phpBinaryArgsText(args []string) string {
+	var b strings.Builder
+	for _, a := range args {
+		_, _ = b.WriteString(a + "\n") // a strings.Builder never fails
+	}
+	return b.String()
+}
+
+// phpBinaryHas reports whether the file at path holds content.
+func phpBinaryHas(path, content string) bool {
+	b, err := os.ReadFile(path)
+	return err == nil && string(b) == content
+}
+
+// phpBinarySame reports whether path is exe: its link, or a copy of the
+// same size. Reading 40 MB to compare would cost every run, and the
+// directory is the user's own, so a copy is taken on its size.
+func phpBinarySame(exe, path string) bool {
+	a, err := os.Stat(exe)
+	if err != nil {
+		return false
+	}
+	b, err := os.Stat(path)
+	return err == nil && b.Mode().IsRegular() && (os.SameFile(a, b) || a.Size() == b.Size())
 }
 
 func phpBinaryCopy(src, dst string) error {
@@ -172,8 +212,12 @@ func phpBinaryWrite(path string, mode fs.FileMode, write func(io.Writer) error) 
 }
 
 // phpBinaryArgs returns the global options of the php.exe that is running,
-// from phpBinaryArgsFile next to it, or none.
+// from phpBinaryArgsFile next to it, or none. Only Windows writes one, so
+// a php symlink on Unix reads no stray file beside it.
 func phpBinaryArgs() []string {
+	if runtime.GOOS != "windows" {
+		return nil
+	}
 	exe, err := os.Executable()
 	if err != nil {
 		return nil
@@ -182,8 +226,14 @@ func phpBinaryArgs() []string {
 	if err != nil {
 		return nil
 	}
+	return phpBinaryParseArgs(string(b))
+}
+
+// phpBinaryParseArgs reads one option per line. An editor may have left
+// CRLF, or blank lines.
+func phpBinaryParseArgs(text string) []string {
 	var args []string
-	for line := range strings.SplitSeq(string(b), "\n") {
+	for line := range strings.SplitSeq(text, "\n") {
 		if line = strings.TrimSuffix(line, "\r"); line != "" {
 			args = append(args, line)
 		}

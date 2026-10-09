@@ -256,7 +256,7 @@ func (h *HTTPHandler) serveRouter(w *httpRecorder, r *http.Request, clean string
 	// What php -S would run without a router, which $_SERVER describes.
 	target := httpRoute{script: clean}
 	switch route := h.route(clean+"/", clean, !h.cfg.NoFrontController); {
-	case route.script != "" && route.script == h.cfg.FrontController && !strings.HasPrefix(clean, route.script):
+	case route.script != "" && route.script == h.cfg.FrontController && clean != route.script && !strings.HasPrefix(clean, route.script+"/"):
 		// php -S passes the whole path to the index it falls back to, but
 		// not when the path names it.
 		target = httpRoute{script: route.script, pathInfo: clean}

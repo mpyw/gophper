@@ -23,6 +23,7 @@ import (
 	"github.com/tetratelabs/wazero/api"
 
 	"github.com/mpyw/gophper/internal/hostnet"
+	"github.com/mpyw/gophper/internal/hostpath"
 	"github.com/mpyw/gophper/internal/wasi"
 )
 
@@ -153,7 +154,12 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 			}
 			host, _, ok := p.hostPath(path)
 			if !ok {
-				return wasi.ENOENT
+				// Outside what PHP may read, such as /bin/sh in serve. A
+				// child runs on the host anyway, with gophper's rights, so
+				// it is found as the CLI would find it.
+				if host, ok = hostpath.Host(path); !ok {
+					return wasi.ENOENT
+				}
 			}
 			name = host
 		} else {
@@ -340,13 +346,17 @@ func processWithBinDir(env []string, dir string) []string {
 	}
 	sep := string(filepath.ListSeparator)
 	for i, kv := range env {
-		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
-			env[i] = "PATH=" + dir + sep + v
+		if v, ok := processPathValue(kv); ok {
+			// The key as it was: Windows spells it Path.
+			env[i] = kv[:len(kv)-len(v)] + dir + sep + v
 			return env
 		}
 	}
 	// No PATH: the default a shell would use, after dir.
-	return append(env, "PATH="+dir+sep+"/usr/local/bin:/usr/bin:/bin")
+	if processDefaultPath == "" {
+		return append(env, "PATH="+dir)
+	}
+	return append(env, "PATH="+dir+sep+processDefaultPath)
 }
 
 // processResolve finds a program by a name with no slash, as execvp
@@ -357,7 +367,7 @@ func processResolve(name string, search bool, cwd string, env []string) (string,
 	}
 	dirs := os.Getenv("PATH")
 	for _, kv := range env {
-		if v, ok := strings.CutPrefix(kv, "PATH="); ok {
+		if v, ok := processPathValue(kv); ok {
 			dirs = v
 		}
 	}
@@ -368,8 +378,7 @@ func processResolve(name string, search bool, cwd string, env []string) (string,
 		if !filepath.IsAbs(dir) {
 			dir = filepath.Join(cwd, dir)
 		}
-		path := filepath.Join(dir, name)
-		if st, err := os.Stat(path); err == nil && st.Mode().IsRegular() && st.Mode()&0o111 != 0 {
+		if path, ok := processExecutable(filepath.Join(dir, name)); ok {
 			return path, nil
 		}
 	}

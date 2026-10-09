@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -315,6 +316,11 @@ func TestHTTPRouter(t *testing.T) {
 	if want := "router: /index.php script /index.php path info - cwd public\nrouter env leaked: false\n"; res.StatusCode != 200 || body != want {
 		t.Errorf("/index.php: %d %q", res.StatusCode, body)
 	}
+	// A path that only starts with its name falls back to it, as php -S.
+	res, body = get(t, srv.URL+"/index.php.bak")
+	if want := "router: /index.php.bak script /index.php path info /index.php.bak cwd public\nrouter env leaked: false\n"; res.StatusCode != 200 || body != want {
+		t.Errorf("/index.php.bak: %d %q", res.StatusCode, body)
+	}
 	// The root is the front controller, with no path info.
 	res, body = get(t, srv.URL+"/")
 	if want := "router: / script /index.php path info - cwd public\nrouter env leaked: false\n"; res.StatusCode != 200 || body != want {
@@ -524,5 +530,25 @@ func TestHTTPEngineClosed(t *testing.T) {
 	defer mu.Unlock()
 	if !strings.Contains(log.String(), "gophper: /index.php") {
 		t.Errorf("log %q", log.String())
+	}
+}
+
+// TestHTTPRunsHostPrograms starts programs outside the mounts, as serve
+// lets PHP do: /bin/sh for exec(), and a program by its path.
+func TestHTTPRunsHostPrograms(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("needs /bin/sh and /bin/echo")
+	}
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.php"), []byte(`<?php
+		echo shell_exec("echo hi");
+		$p = proc_open(["/bin/echo", "by path"], [1 => ["pipe", "w"]], $pipes);
+		echo stream_get_contents($pipes[1]);
+		proc_close($p);`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := startHTTPWith(t, func(cfg *server.HTTPConfig) { cfg.Root = root })
+	if res, body := get(t, srv.URL+"/"); res.StatusCode != 200 || body != "hi\nby path\n" {
+		t.Errorf("%d %q", res.StatusCode, body)
 	}
 }

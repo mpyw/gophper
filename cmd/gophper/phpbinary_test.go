@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"testing"
@@ -18,8 +19,8 @@ func TestPHPBinaryScriptFallback(t *testing.T) {
 	tmp := t.TempDir()
 	t.Setenv("TMPDIR", tmp)
 	if runtime.GOOS == "windows" {
-		// The profile's temporary directory, with php.exe and its options.
-		t.Setenv("TMP", tmp)
+		// The user's local application data, with php.exe and its options.
+		t.Setenv("LOCALAPPDATA", tmp)
 		path, err := phpBinaryScript("", []string{"--no-cache"})
 		if err != nil {
 			t.Fatal(err)
@@ -158,5 +159,52 @@ func TestPHPBinaryExe(t *testing.T) {
 	}
 	if err := phpBinaryCopy(filepath.Join(t.TempDir(), "missing"), copied); err == nil {
 		t.Error("copied a missing file")
+	}
+}
+
+// TestPHPBinaryExeReuse uses a php.exe that runs with these options as it
+// is, and keeps an equal gophper.args, which a running php.exe may read.
+func TestPHPBinaryExeReuse(t *testing.T) {
+	dir := t.TempDir()
+	exe := filepath.Join(dir, "php.exe")
+	if err := os.WriteFile(exe, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	args := []string{"--no-cache"}
+	if err := os.WriteFile(filepath.Join(dir, phpBinaryArgsFile), []byte(phpBinaryArgsText(args)), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if path, err := phpBinaryExe(t.TempDir(), exe, args); err != nil || path != exe {
+		t.Errorf("a php.exe with these options: %s, %v", path, err)
+	}
+	base := t.TempDir()
+	path, err := phpBinaryExe(base, exe, nil)
+	if err != nil || path == exe {
+		t.Fatalf("other options: %s, %v", path, err)
+	}
+	argsFile := filepath.Join(filepath.Dir(path), phpBinaryArgsFile)
+	before, err := os.Stat(argsFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Made again, as after the copy was removed: gophper.args stays.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := phpBinaryExe(base, exe, nil); err != nil {
+		t.Fatal(err)
+	}
+	if after, err := os.Stat(argsFile); err != nil || !os.SameFile(before, after) {
+		t.Errorf("gophper.args was written again: %v", err)
+	}
+}
+
+func TestPHPBinaryParseArgs(t *testing.T) {
+	got := phpBinaryParseArgs("--cache-dir\r\nC:\\cache\r\n\r\n--no-cache\n")
+	if want := []string{"--cache-dir", `C:\cache`, "--no-cache"}; !slices.Equal(got, want) {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if got := phpBinaryParseArgs(""); got != nil {
+		t.Errorf("empty: %q", got)
 	}
 }

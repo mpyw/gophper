@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/mpyw/gophper"
@@ -53,6 +54,11 @@ type poolWorker struct {
 	served int
 	// done is closed when php-cgi exits.
 	done chan struct{}
+	// listenBy is when php-cgi must listen, until its first connection.
+	// The socket file appears at bind(), a moment before listen(), so a
+	// connection in between is refused. Zero once connected, or for a
+	// worker that served before.
+	listenBy time.Time
 }
 
 // poolWorkerStartTimeout is how long php-cgi gets to start listening.
@@ -68,7 +74,7 @@ func (p *pool) poolServe(ctx context.Context, vars map[string]string, stdin io.R
 		if err != nil {
 			return 0, err
 		}
-		conn, err := net.Dial("unix", w.sock)
+		conn, err := p.poolDial(w)
 		if err != nil {
 			p.poolStop(w)
 			if attempt == 0 {
@@ -88,6 +94,25 @@ func (p *pool) poolServe(ctx context.Context, vars map[string]string, stdin io.R
 			p.poolPut(w)
 		}
 		return code, nil
+	}
+}
+
+// poolDial connects to w. A worker that just started may not listen yet,
+// so a refused connection is tried again until it must.
+func (p *pool) poolDial(w *poolWorker) (net.Conn, error) {
+	for {
+		conn, err := net.Dial("unix", w.sock)
+		// Windows refuses with WSAECONNREFUSED, which syscall does not name.
+		refused := errors.Is(err, syscall.ECONNREFUSED) || errors.Is(err, syscall.Errno(10061))
+		if err == nil || w.listenBy.IsZero() || !refused || time.Now().After(w.listenBy) {
+			w.listenBy = time.Time{}
+			return conn, err
+		}
+		select {
+		case <-w.done:
+			return nil, err
+		case <-time.After(5 * time.Millisecond):
+		}
 	}
 }
 
@@ -117,7 +142,7 @@ func (p *pool) poolTake() (*poolWorker, error) {
 // poolStart starts php-cgi listening on sock, and waits until it listens.
 func (p *pool) poolStart(sock string) (*poolWorker, error) {
 	ctx, cancel := context.WithCancel(context.Background())
-	w := &poolWorker{sock: sock, cancel: cancel, done: make(chan struct{})}
+	w := &poolWorker{sock: sock, cancel: cancel, done: make(chan struct{}), listenBy: time.Now().Add(poolWorkerStartTimeout)}
 	env := append(slices.Clone(p.env), "PHP_FCGI_MAX_REQUESTS=0")
 	p.workers.mu.Lock()
 	if p.workers.closed {
