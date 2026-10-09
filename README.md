@@ -8,6 +8,7 @@ Run PHP from Go with no cgo.
 
 [![Build](https://github.com/mpyw/gophper/actions/workflows/test.yml/badge.svg)](https://github.com/mpyw/gophper/actions/workflows/test.yml)
 [![Coverage](https://codecov.io/gh/mpyw/gophper/graph/badge.svg)](https://codecov.io/gh/mpyw/gophper)
+[![Go Reference](https://pkg.go.dev/badge/github.com/mpyw/gophper.svg)](https://pkg.go.dev/github.com/mpyw/gophper)
 
 </div>
 
