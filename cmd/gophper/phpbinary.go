@@ -62,35 +62,12 @@ func phpBinaryScript(cacheDir string, args []string) (string, error) {
 	})
 }
 
-// phpBinaryBase is the cache directory, or one in the temporary directory.
+// phpBinaryBase is the cache directory, or phpBinaryTempBase without one.
 func phpBinaryBase(cacheDir string) (string, error) {
 	if cacheDir != "" {
 		return cacheDir, nil
 	}
-	if runtime.GOOS == "windows" {
-		// TMP may name a directory others share, such as C:\Windows\Temp
-		// for a service. The user's own local application data is private.
-		base, err := os.UserCacheDir()
-		if err != nil {
-			return "", err
-		}
-		return filepath.Join(base, "gophper"), nil
-	}
-	base := filepath.Join(os.TempDir(), fmt.Sprintf("gophper-%d", os.Getuid()))
-	// Anyone can create this name first, and then replace the script
-	// between our write and PHP's exec. So only a private directory of
-	// our own will do.
-	if err := os.Mkdir(base, 0o700); err != nil && !errors.Is(err, fs.ErrExist) {
-		return "", err
-	}
-	fi, err := os.Lstat(base)
-	if err != nil {
-		return "", err
-	}
-	if !fi.IsDir() || fi.Mode().Perm()&0o077 != 0 || !phpBinaryOwned(fi) {
-		return "", fmt.Errorf("%s: not a private directory of this user", base)
-	}
-	return base, nil
+	return phpBinaryTempBase()
 }
 
 // phpBinaryExe links or copies exe to php.exe, in a directory of its own

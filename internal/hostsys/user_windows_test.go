@@ -46,6 +46,16 @@ func TestUserWindows(t *testing.T) {
 	if _, g := getUser(t, userGroupByID, userWindowsID, "", 4096); len(g) != 4 || g[2] != "1000" || g[3] != short {
 		t.Errorf("group: %q", g)
 	}
+	// Only the current user and its group exist.
+	if _, ok := userFindUser(false, 0, "gophper-no-such-user"); ok {
+		t.Error("another user by name")
+	}
+	if _, ok := userFindGroup(false, 0, "gophper-no-such-group"); ok {
+		t.Error("another group by name")
+	}
+	if _, ok := userFindGroup(true, 0, ""); ok {
+		t.Error("gid 0 exists")
+	}
 	if uid, gid, groups := userCurrentIDs(); uid != 1000 || gid != 1000 || len(groups) != 0 {
 		t.Errorf("ids %d %d %v", uid, gid, groups)
 	}

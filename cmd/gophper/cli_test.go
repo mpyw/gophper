@@ -362,6 +362,15 @@ func TestCLIAsPHPWithOptions(t *testing.T) {
 	if _, errOut, code := cliRun(t, t.TempDir(), "", "--extension-dir", ext, "extension", "install", "dl_test"); code != 0 {
 		t.Fatalf("install: exit %d: %s", code, errOut)
 	}
+	// With no gophper.args, the options come from the environment only.
+	bare := exec.Command(php, "-r", `echo "bare";`)
+	bare.Env = append(bare.Environ(), "GOPHPER_CACHE_DIR="+cliCacheDir)
+	if cliCoverDir != "" {
+		bare.Env = append(bare.Env, "GOCOVERDIR="+cliCoverDir)
+	}
+	if out, err := bare.CombinedOutput(); err != nil || string(out) != "bare" {
+		t.Errorf("without gophper.args: %v: %q", err, out)
+	}
 	// CRLF and a blank line, as an editor on Windows may leave them.
 	cliWrite(t, filepath.Join(dir, "gophper.args"), "--cache-dir\r\n"+cliCacheDir+"\r\n\r\n--extension-dir\r\n"+ext+"\r\n")
 	cmd := exec.Command(php, "-d", "extension=dl_test", "-r", `echo extension_loaded("dl_test") ? "loaded" : "missing";`)
