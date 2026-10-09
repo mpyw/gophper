@@ -1,0 +1,74 @@
+package hostnet
+
+import (
+	"context"
+	"errors"
+	"net"
+	"strings"
+
+	"github.com/tetratelabs/wazero"
+	"github.com/tetratelabs/wazero/api"
+)
+
+// ExportDNS adds the resolver host functions, used by getaddrinfo(3) and
+// friends in gophper-wasm's compat/gophper_net.c. from returns the instance a call
+// comes from, so a lookup stops at its interrupts.
+func ExportDNS(b wazero.HostModuleBuilder, from func(context.Context) Run) {
+	x := dnsExports{from: from}
+	b.NewFunctionBuilder().WithFunc(x.lookup).Export("dns_lookup")
+	b.NewFunctionBuilder().WithFunc(x.reverse).Export("dns_reverse")
+}
+
+type dnsExports struct {
+	from func(context.Context) Run
+}
+
+// lookup writes name's addresses as lines of text. family is 4, 6 or 0
+// for both. It returns the length, which exceeds outCap when the caller
+// must retry with more room, or -1 for an unknown name and -2 otherwise.
+func (x dnsExports) lookup(ctx context.Context, m api.Module, namePtr, nameLen uint32, family int32, outPtr, outCap uint32) int32 {
+	name, _ := m.Memory().Read(namePtr, nameLen)
+	network := "ip"
+	switch family {
+	case 4:
+		network = "ip4"
+	case 6:
+		network = "ip6"
+	}
+	lctx, cancel := interruptibleRunContext(x.from(ctx))
+	defer cancel()
+	ips, err := net.DefaultResolver.LookupIP(lctx, network, string(name))
+	if err != nil {
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+			return -1
+		}
+		return -2
+	}
+	lines := make([]string, len(ips))
+	for i, ip := range ips {
+		lines[i] = ip.String()
+	}
+	text := strings.Join(lines, "\n")
+	if len(text) <= int(outCap) {
+		m.Memory().WriteString(outPtr, text)
+	}
+	return int32(len(text))
+}
+
+// reverse writes the first name for an address, or returns -1.
+func (x dnsExports) reverse(ctx context.Context, m api.Module, addrPtr, addrLen, outPtr, outCap uint32) int32 {
+	addr, _ := m.Memory().Read(addrPtr, addrLen)
+	lctx, cancel := interruptibleRunContext(x.from(ctx))
+	defer cancel()
+	names, err := net.DefaultResolver.LookupAddr(lctx, string(addr))
+	if err != nil || len(names) == 0 {
+		return -1
+	}
+	name := strings.TrimSuffix(names[0], ".")
+	if len(name) > int(outCap) {
+		name = name[:outCap]
+	}
+	m.Memory().WriteString(outPtr, name)
+	return int32(len(name))
+}

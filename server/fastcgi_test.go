@@ -1,0 +1,409 @@
+package server_test
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/textproto"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/mpyw/gophper"
+	"github.com/mpyw/gophper/server"
+)
+
+// fcgiResponse is a parsed FastCGI response.
+type fcgiResponse struct {
+	Status    int
+	Header    textproto.MIMEHeader
+	Body      string
+	Stderr    string
+	AppStatus uint32
+}
+
+// fcgiClient is a minimal FastCGI client, enough to drive the server in tests.
+type fcgiClient struct {
+	conn net.Conn
+	r    *bufio.Reader
+}
+
+func dialFCGI(t testing.TB, addr string) *fcgiClient {
+	t.Helper()
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.Close() })
+	return &fcgiClient{conn: conn, r: bufio.NewReader(conn)}
+}
+
+func (c *fcgiClient) write(typ uint8, id uint16, content []byte) error {
+	var b bytes.Buffer
+	pad := -len(content) & 7
+	binary.Write(&b, binary.BigEndian, struct {
+		Version, Type uint8
+		ID, Len       uint16
+		Pad, Reserved uint8
+	}{1, typ, id, uint16(len(content)), uint8(pad), 0})
+	b.Write(content)
+	b.Write(make([]byte, pad))
+	_, err := c.conn.Write(b.Bytes())
+	return err
+}
+
+func (c *fcgiClient) do(id uint16, keep bool, params map[string]string, body []byte) (*fcgiResponse, error) {
+	flags := byte(0)
+	if keep {
+		flags = 1
+	}
+	if err := c.write(1, id, []byte{0, 1, flags, 0, 0, 0, 0, 0}); err != nil {
+		return nil, err
+	}
+	var p []byte
+	for k, v := range params {
+		for _, n := range []int{len(k), len(v)} {
+			if n < 128 {
+				p = append(p, byte(n))
+			} else {
+				p = binary.BigEndian.AppendUint32(p, uint32(n)|1<<31)
+			}
+		}
+		p = append(p, k...)
+		p = append(p, v...)
+	}
+	c.write(4, id, p)
+	c.write(4, id, nil)
+	for len(body) > 0 {
+		n := min(len(body), 65535)
+		c.write(5, id, body[:n])
+		body = body[n:]
+	}
+	c.write(5, id, nil)
+
+	var stdout, stderr bytes.Buffer
+	for {
+		var h struct {
+			Version, Type uint8
+			ID, Len       uint16
+			Pad, Reserved uint8
+		}
+		if err := binary.Read(c.r, binary.BigEndian, &h); err != nil {
+			return nil, err
+		}
+		buf := make([]byte, int(h.Len)+int(h.Pad))
+		if _, err := io.ReadFull(c.r, buf); err != nil {
+			return nil, err
+		}
+		buf = buf[:h.Len]
+		switch h.Type {
+		case 6:
+			stdout.Write(buf)
+		case 7:
+			stderr.Write(buf)
+		case 3:
+			res := &fcgiResponse{AppStatus: binary.BigEndian.Uint32(buf), Stderr: stderr.String(), Status: 200}
+			tp := textproto.NewReader(bufio.NewReader(&stdout))
+			hdr, err := tp.ReadMIMEHeader()
+			if err != nil {
+				return nil, fmt.Errorf("bad CGI headers: %w\n%s", err, stdout.String())
+			}
+			res.Header = hdr
+			if s := hdr.Get("Status"); s != "" {
+				res.Status, _ = strconv.Atoi(strings.Fields(s)[0])
+			}
+			rest, _ := io.ReadAll(tp.R)
+			res.Body = string(rest)
+			return res, nil
+		}
+	}
+}
+
+func startFCGI(t testing.TB, ini ...string) (addr, root string) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	engine, err := gophper.NewEngine(ctx, gophper.DefaultEngineConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err = filepath.Abs("testdata/www")
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &server.FastCGIServer{Engine: engine, Root: root, TempDir: t.TempDir(), Workers: 4, INI: ini}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		if err := srv.Serve(ctx, l); err != nil {
+			t.Error(err)
+		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		<-done
+		engine.Close(context.Background())
+	})
+	return l.Addr().String(), root
+}
+
+// params mimics nginx's fastcgi_params with fastcgi_split_path_info.
+func params(root, method, uri string, extra map[string]string) map[string]string {
+	path, query, _ := strings.Cut(uri, "?")
+	scriptName, pathInfo := path, ""
+	if i := strings.Index(path, ".php"); i >= 0 {
+		scriptName, pathInfo = path[:i+4], path[i+4:]
+	}
+	p := map[string]string{
+		"GATEWAY_INTERFACE": "CGI/1.1",
+		"SERVER_SOFTWARE":   "nginx",
+		"SERVER_PROTOCOL":   "HTTP/1.1",
+		"REQUEST_METHOD":    method,
+		"REQUEST_URI":       uri,
+		"QUERY_STRING":      query,
+		"SCRIPT_NAME":       scriptName,
+		"PATH_INFO":         pathInfo,
+		"SCRIPT_FILENAME":   root + scriptName,
+		"DOCUMENT_ROOT":     root,
+		"SERVER_NAME":       "localhost",
+		"SERVER_PORT":       "80",
+		"REMOTE_ADDR":       "127.0.0.1",
+		"HTTP_HOST":         "localhost",
+		"HTTP_USER_AGENT":   "gophper-test",
+	}
+	for k, v := range extra {
+		p[k] = v
+	}
+	return p
+}
+
+func TestFastCGI(t *testing.T) {
+	addr, root := startFCGI(t)
+
+	t.Run("params reach $_SERVER unchanged", func(t *testing.T) {
+		c := dialFCGI(t, addr)
+		res, err := c.do(1, false, params(root, "GET", "/index.php/users/42?a=1&b[]=x", map[string]string{"GOPHPER_CUSTOM": "custom-value"}), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Status != 201 || res.Header.Get("X-Gophper") != "yes" {
+			t.Fatalf("status %d, header %v\n%s", res.Status, res.Header, res.Stderr)
+		}
+		var got map[string]any
+		if err := json.Unmarshal([]byte(res.Body), &got); err != nil {
+			t.Fatalf("%v: %s", err, res.Body)
+		}
+		want := map[string]any{
+			"sapi":        "cgi-fcgi",
+			"script_name": "/index.php",
+			"path_info":   "/users/42",
+			"request_uri": "/index.php/users/42?a=1&b[]=x",
+			"method":      "GET",
+			"ua":          "gophper-test",
+			"custom":      "custom-value",
+		}
+		for k, v := range want {
+			if got[k] != v {
+				t.Errorf("%s = %v, want %v", k, got[k], v)
+			}
+		}
+		if fmt.Sprint(got["get"]) != "map[a:1 b:[x]]" {
+			t.Errorf("get = %v", got["get"])
+		}
+	})
+
+	t.Run("POST body larger than one record", func(t *testing.T) {
+		c := dialFCGI(t, addr)
+		form := "name=gophper&pad=" + strings.Repeat("x", 200_000)
+		res, err := c.do(1, false, params(root, "POST", "/index.php", map[string]string{
+			"CONTENT_TYPE":   "application/x-www-form-urlencoded",
+			"CONTENT_LENGTH": strconv.Itoa(len(form)),
+		}), []byte(form))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var got struct {
+			Post    map[string]string `json:"post"`
+			BodyLen int               `json:"body_len"`
+		}
+		if err := json.Unmarshal([]byte(res.Body), &got); err != nil {
+			t.Fatalf("%v: %s", err, res.Body)
+		}
+		if got.Post["name"] != "gophper" || len(got.Post["pad"]) != 200_000 {
+			t.Errorf("post = name %q, pad %d bytes", got.Post["name"], len(got.Post["pad"]))
+		}
+	})
+
+	t.Run("keep-alive serves several requests on one connection", func(t *testing.T) {
+		c := dialFCGI(t, addr)
+		for i := range 3 {
+			res, err := c.do(uint16(i+1), true, params(root, "GET", "/index.php?i="+strconv.Itoa(i), nil), nil)
+			if err != nil {
+				t.Fatalf("request %d: %v", i, err)
+			}
+			if res.Status != 201 {
+				t.Fatalf("request %d: status %d", i, res.Status)
+			}
+		}
+	})
+
+	// Like php-fpm: with display_errors on, the error is the page and the status stays 200.
+	t.Run("fatal error with display_errors on", func(t *testing.T) {
+		c := dialFCGI(t, addr)
+		res, err := c.do(1, false, params(root, "GET", "/index.php?mode=fatal", nil), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Status != http.StatusOK || !strings.Contains(res.Body, "Call to undefined function undefined_fn()") {
+			t.Errorf("status = %d, want 200 with the error in the body\n%s", res.Status, res.Body)
+		}
+	})
+
+	t.Run("missing script", func(t *testing.T) {
+		c := dialFCGI(t, addr)
+		res, err := c.do(1, false, params(root, "GET", "/nope.php", nil), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Status != http.StatusNotFound {
+			t.Errorf("status = %d, want 404\n%s", res.Status, res.Body)
+		}
+	})
+
+	t.Run("requests run in parallel", func(t *testing.T) {
+		const n = 4
+		start := time.Now()
+		var wg sync.WaitGroup
+		for range n {
+			wg.Go(func() {
+				c := dialFCGI(t, addr)
+				res, err := c.do(1, false, params(root, "GET", "/index.php?mode=sleep&ms=500", nil), nil)
+				if err != nil || res.Body != "slept\n" {
+					t.Errorf("%v %+v", err, res)
+				}
+			})
+		}
+		wg.Wait()
+		if d := time.Since(start); d > 1500*time.Millisecond {
+			t.Errorf("%d requests of 500ms took %s; not parallel", n, d)
+		}
+	})
+}
+
+func TestFastCGIINI(t *testing.T) {
+	addr, root := startFCGI(t, "display_errors=0", "log_errors=1")
+
+	// The query starts with "-", which makes php-cgi skip -d arguments. PHPRC still applies.
+	for _, uri := range []string{"/index.php?mode=fatal", "/index.php?-x&mode=fatal"} {
+		c := dialFCGI(t, addr)
+		res, err := c.do(1, false, params(root, "GET", uri, nil), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Status != http.StatusInternalServerError {
+			t.Errorf("%s: status = %d, want 500\n%s", uri, res.Status, res.Body)
+		}
+		if strings.Contains(res.Body, "undefined_fn") {
+			t.Errorf("%s: error leaked into the body:\n%s", uri, res.Body)
+		}
+		if !strings.Contains(res.Stderr, "Call to undefined function undefined_fn()") {
+			t.Errorf("%s: error not logged to FCGI_STDERR:\n%s", uri, res.Stderr)
+		}
+	}
+}
+
+// Nothing the server needs leaks into the script's environment.
+func TestFastCGIEnvironment(t *testing.T) {
+	addr, root := startFCGI(t)
+	res, err := dialFCGI(t, addr).do(1, false, params(root, "GET", "/env.php", nil), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Env              map[string]bool `json:"env"`
+		TempDir          string          `json:"temp_dir"`
+		INIFile          string          `json:"ini_file"`
+		MaxExecutionTime string          `json:"max_execution_time"`
+	}
+	if err := json.Unmarshal([]byte(res.Body), &got); err != nil {
+		t.Fatalf("%v: %s", err, res.Body)
+	}
+	for k, present := range got.Env {
+		if present {
+			t.Errorf("%s is visible to PHP", k)
+		}
+	}
+	if got.TempDir != "/tmp" || got.INIFile != "/etc/gophper/php.ini" {
+		t.Errorf("temp dir %q, ini file %q", got.TempDir, got.INIFile)
+	}
+	// php-cgi's built-in default, as with php-fpm.
+	if got.MaxExecutionTime != "30" {
+		t.Errorf("max_execution_time = %q, want 30", got.MaxExecutionTime)
+	}
+}
+
+func TestFastCGITimeout(t *testing.T) {
+	addr, root := startFCGI(t, "max_execution_time=1", "display_errors=0", "log_errors=1")
+
+	for _, tc := range []struct{ name, uri string }{
+		{"sleeping", "/index.php?mode=sleep&ms=5000&shutdown=1"},
+		{"busy loop", "/index.php?mode=spin&shutdown=1"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			c := dialFCGI(t, addr)
+			start := time.Now()
+			res, err := c.do(1, false, params(root, "GET", tc.uri, nil), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if d := time.Since(start); d < time.Second || d > 2500*time.Millisecond {
+				t.Errorf("timeout took %s, want about 1s", d)
+			}
+			if res.Status != http.StatusInternalServerError {
+				t.Errorf("status = %d, want 500\n%s", res.Status, res.Body)
+			}
+			if !strings.Contains(res.Stderr, "Maximum execution time of 1 second exceeded") {
+				t.Errorf("stderr:\n%s", res.Stderr)
+			}
+			if !strings.Contains(res.Body, "shutdown ran") {
+				t.Errorf("shutdown function did not run:\n%s", res.Body)
+			}
+		})
+	}
+}
+
+func BenchmarkFastCGI(b *testing.B) {
+	addr, root := startFCGI(b)
+	p := params(root, "GET", "/index.php?a=1", nil)
+	b.Run("sequential", func(b *testing.B) {
+		c := dialFCGI(b, addr)
+		for i := 0; b.Loop(); i++ {
+			if _, err := c.do(uint16(i%65535+1), true, p, nil); err != nil {
+				b.Fatal(err)
+			}
+		}
+	})
+	b.Run("parallel", func(b *testing.B) {
+		b.RunParallel(func(pb *testing.PB) {
+			c := dialFCGI(b, addr)
+			for i := 0; pb.Next(); i++ {
+				if _, err := c.do(uint16(i%65535+1), true, p, nil); err != nil {
+					b.Error(err)
+					return
+				}
+			}
+		})
+	})
+}

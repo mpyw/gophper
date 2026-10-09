@@ -1,0 +1,6 @@
+# Local builds and logs
+/build/
+*.log
+
+# IDE
+/.idea/
