@@ -1,3 +1,5 @@
+<p align="center"><img src=".github/assets/icon.png" width="200" alt="A Go gopher riding a purple elephant out of a hexagon"></p>
+
 # gophper
 
 Run PHP 8.6 from Go with no cgo.
@@ -343,4 +345,8 @@ Each keeps its own license. `gophper licenses` prints them all, with the license
 
 > [!IMPORTANT]
 > To distribute a gophper binary, pass on what `gophper licenses` prints.
+
+The mascot shows a Go gopher riding an elephant in the style of PHP's ElePHPant.
+The Go gopher was designed by Renée French, under [CC BY 4.0](https://creativecommons.org/licenses/by/4.0/).
+The ElePHPant was designed by Vincent Pontier.
 > `gmp.so` links GMP under the LGPL. gophper-wasm's README says what that asks of a distributor.
