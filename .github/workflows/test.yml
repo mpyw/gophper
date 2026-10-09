@@ -20,7 +20,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, macos-15, windows-2025]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 30
+    timeout-minutes: 45
     # id-token: write lets the Codecov upload authenticate as this run,
     # with no stored token. A job's permissions replace the workflow's, so
     # contents: read is restated.
@@ -39,22 +39,20 @@ jobs:
       - name: Vet
         run: go vet ./...
 
-      - name: Test
-        if: matrix.os != 'ubuntu-24.04'
-        run: go test ./...
-
       # cmd/gophper's tests run the built binary, which go test does not
       # count. coverage.sh builds it with -cover and merges both profiles.
+      # Every OS runs it: each has code of its own, which only it can reach.
       - name: Test with coverage
-        if: matrix.os == 'ubuntu-24.04'
+        shell: bash
         run: ./coverage.sh
 
-      # Codecov being unreachable is no reason to fail the run.
+      # Codecov merges the three uploads of a commit. The flag tells them
+      # apart. Codecov being unreachable is no reason to fail the run.
       - name: Upload coverage to Codecov
-        if: matrix.os == 'ubuntu-24.04'
         uses: codecov/codecov-action@v7
         with:
           files: ./coverage-merged.txt
+          flags: ${{ runner.os }}
           use_oidc: true
         continue-on-error: true
 

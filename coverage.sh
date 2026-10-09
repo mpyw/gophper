@@ -17,6 +17,10 @@ cd "$(dirname "$0")"
 
 covdir="$(mktemp -d)"
 trap 'rm -rf "$covdir"' EXIT
+# Git Bash on Windows: Go wants C:/..., not the /tmp/... that mktemp gives.
+if command -v cygpath > /dev/null; then
+    covdir="$(cygpath -m "$covdir")"
+fi
 
 # -count=1: a cached package runs no test, so its binary writes no counters.
 #

@@ -1,5 +1,9 @@
 codecov:
   require_ci_to_pass: true
+  # One upload for each OS: the status waits for all of them, as code for
+  # one OS is reached only there.
+  notify:
+    after_n_builds: 3
 
 coverage:
   precision: 1
