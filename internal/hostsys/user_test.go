@@ -6,6 +6,7 @@ package hostsys
 
 import (
 	"context"
+	"errors"
 	"os"
 	"os/user"
 	"strconv"
@@ -150,5 +151,30 @@ func TestUserIDsAndHostName(t *testing.T) {
 	}
 	if n := userHostName(context.Background(), m, out, 1); n != 1 {
 		t.Errorf("truncated host name: %d, want 1", n)
+	}
+}
+
+// TestUserLookupFallback is the build without cgo on macOS: /etc/passwd
+// lacks the current user, who is then taken from user.Current.
+func TestUserLookupFallback(t *testing.T) {
+	lookupID, lookup, current := userOSLookupID, userOSLookup, userOSCurrent
+	t.Cleanup(func() { userOSLookupID, userOSLookup, userOSCurrent = lookupID, lookup, current })
+	missing := errors.New("not in /etc/passwd")
+	userOSLookupID = func(string) (*user.User, error) { return nil, missing }
+	userOSLookup = func(string) (*user.User, error) { return nil, missing }
+	me := &user.User{Uid: "501", Username: "me"}
+	userOSCurrent = func() (*user.User, error) { return me, nil }
+	if u, err := userLookup(true, 501, ""); err != nil || u != me {
+		t.Errorf("by id: %v, %v", u, err)
+	}
+	if u, err := userLookup(false, 0, "me"); err != nil || u != me {
+		t.Errorf("by name: %v, %v", u, err)
+	}
+	if _, err := userLookup(true, 502, ""); !errors.Is(err, missing) {
+		t.Errorf("another user: %v", err)
+	}
+	userOSCurrent = func() (*user.User, error) { return nil, errors.New("no $USER") }
+	if _, err := userLookup(false, 0, "me"); !errors.Is(err, missing) {
+		t.Errorf("no current user: %v", err)
 	}
 }

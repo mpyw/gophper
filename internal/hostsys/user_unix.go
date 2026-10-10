@@ -43,6 +43,14 @@ func userFindGroup(byID bool, id int32, name string) ([]string, bool) {
 	return []string{g.Name, "x", g.Gid, ""}, true
 }
 
+// The os/user calls of userLookup are vars so that a test can be the
+// build without cgo, where only /etc/passwd is read.
+var (
+	userOSLookupID = user.LookupId
+	userOSLookup   = user.Lookup
+	userOSCurrent  = user.Current
+)
+
 // userLookup finds a user. Without cgo, os/user reads only /etc/passwd,
 // which on macOS lacks real users. The current user is then taken from
 // user.Current, which falls back to $USER and $HOME.
@@ -50,14 +58,14 @@ func userLookup(byID bool, id int32, name string) (*user.User, error) {
 	var u *user.User
 	var err error
 	if byID {
-		u, err = user.LookupId(strconv.Itoa(int(id)))
+		u, err = userOSLookupID(strconv.Itoa(int(id)))
 	} else {
-		u, err = user.Lookup(name)
+		u, err = userOSLookup(name)
 	}
 	if err == nil {
 		return u, nil
 	}
-	cur, cerr := user.Current()
+	cur, cerr := userOSCurrent()
 	if cerr != nil {
 		return nil, err
 	}

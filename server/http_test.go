@@ -302,6 +302,19 @@ func TestHTTPRootOutsideMounts(t *testing.T) {
 	}
 }
 
+// A config that passes the mount checks still fails in newPool.
+func TestHTTPBadPool(t *testing.T) {
+	engine, err := gophper.NewEngine(context.Background(), gophper.DefaultEngineConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = engine.Close(context.Background()) }()
+	_, err = server.NewHTTPHandler(engine, server.HTTPConfig{Root: "testdata/app", PHPConfig: server.PHPConfig{MemoryLimit: -1}})
+	if err == nil || !strings.Contains(err.Error(), "is negative") {
+		t.Errorf("err = %v", err)
+	}
+}
+
 func TestHTTPRouter(t *testing.T) {
 	srv := startHTTPWith(t, func(cfg *server.HTTPConfig) {
 		projectConfig(cfg)

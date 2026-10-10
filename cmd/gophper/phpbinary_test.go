@@ -169,6 +169,31 @@ func TestPHPBinaryExe(t *testing.T) {
 	}
 }
 
+// TestPHPBinaryExeRace loses the race with another run: its php.exe is
+// there when ours cannot be renamed over it, as Windows refuses for one
+// that runs. That one is used.
+func TestPHPBinaryExeRace(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "gophper.exe")
+	if err := os.WriteFile(exe, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	rename := phpBinaryRename
+	t.Cleanup(func() { phpBinaryRename = rename })
+	phpBinaryRename = func(_, path string) error {
+		if err := os.WriteFile(path, []byte("binary"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		return errors.New("in use")
+	}
+	path, err := phpBinaryExe(t.TempDir(), exe, nil)
+	if err != nil || filepath.Base(path) != "php.exe" {
+		t.Fatalf("%s, %v", path, err)
+	}
+	if left, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".php-*")); err != nil || len(left) != 0 {
+		t.Errorf("left %v, %v", left, err)
+	}
+}
+
 // TestPHPBinaryExeReuse uses a php.exe that runs with these options as it
 // is, and keeps an equal gophper.args, which a running php.exe may read.
 func TestPHPBinaryExeReuse(t *testing.T) {

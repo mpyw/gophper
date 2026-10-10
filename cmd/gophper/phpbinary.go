@@ -70,6 +70,10 @@ func phpBinaryBase(cacheDir string) (string, error) {
 	return phpBinaryTempBase()
 }
 
+// phpBinaryRename is a var so that a test can lose the race with another
+// run, which makes php.exe between our check and our rename.
+var phpBinaryRename = os.Rename
+
 // phpBinaryExe links or copies exe to php.exe, in a directory of its own
 // for each build of gophper and each set of options.
 func phpBinaryExe(base, exe string, args []string) (string, error) {
@@ -111,7 +115,7 @@ func phpBinaryExe(base, exe string, args []string) (string, error) {
 			return "", err
 		}
 	}
-	if err := os.Rename(tmp, path); err != nil {
+	if err := phpBinaryRename(tmp, path); err != nil {
 		// Gone after a successful rename; otherwise only a stray file.
 		_ = os.Remove(tmp)
 		// Another run made it first, and it may be running already.

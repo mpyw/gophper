@@ -465,13 +465,19 @@ func TestFastCGILimitExtensions(t *testing.T) {
 func TestFastCGIOutsideMounts(t *testing.T) {
 	addr, root := startFCGI(t)
 	p := params(root, "GET", "/index.php", nil)
-	p["SCRIPT_FILENAME"] = "/etc/passwd.php"
+	// A file that exists, so the mount check is what answers. A missing
+	// one would be refused earlier, as no script file.
+	outside := filepath.Join(t.TempDir(), "x.php")
+	if err := os.WriteFile(outside, []byte("<?php echo 'ran';"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	p["SCRIPT_FILENAME"] = outside
 	res, err := dialFCGI(t, addr).do(1, false, p, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.Status != http.StatusNotFound {
-		t.Errorf("status %d\n%s", res.Status, res.Body)
+	if res.Status != http.StatusNotFound || !strings.Contains(res.Stderr, "outside every mount") {
+		t.Errorf("status %d\n%s\n%s", res.Status, res.Body, res.Stderr)
 	}
 }
 

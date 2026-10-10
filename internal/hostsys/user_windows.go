@@ -24,10 +24,13 @@ func userCurrentIDs() (uid, gid uint32, groups []uint32) {
 	return userWindowsID, userWindowsID, nil
 }
 
+// userOSCurrent is a var so that a test can see user.Current fail.
+var userOSCurrent = user.Current
+
 // userCurrent returns the current user, with the name PHP sees: without
 // the domain, as $USER would be.
 func userCurrent() (*user.User, string, bool) {
-	u, err := user.Current()
+	u, err := userOSCurrent()
 	if err != nil {
 		return nil, "", false
 	}

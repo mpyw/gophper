@@ -14,6 +14,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// dnsGetAdaptersAddresses is a var so that a test can see it fail.
+var dnsGetAdaptersAddresses = windows.GetAdaptersAddresses
+
 // dnsSystemServers lists the nameservers of every adapter that is up, as
 // Go's resolver does on Windows (net/dnsconfig_windows.go).
 func dnsSystemServers() []string {
@@ -22,7 +25,7 @@ func dnsSystemServers() []string {
 	for {
 		buf = make([]byte, size)
 		first := (*windows.IpAdapterAddresses)(unsafe.Pointer(&buf[0]))
-		err := windows.GetAdaptersAddresses(syscall.AF_UNSPEC, windows.GAA_FLAG_INCLUDE_PREFIX, 0, first, &size)
+		err := dnsGetAdaptersAddresses(syscall.AF_UNSPEC, windows.GAA_FLAG_INCLUDE_PREFIX, 0, first, &size)
 		if err == nil {
 			break
 		}
@@ -30,8 +33,13 @@ func dnsSystemServers() []string {
 			return nil
 		}
 	}
+	return dnsAdapterServers((*windows.IpAdapterAddresses)(unsafe.Pointer(&buf[0])))
+}
+
+// dnsAdapterServers walks the list GetAdaptersAddresses filled.
+func dnsAdapterServers(first *windows.IpAdapterAddresses) []string {
 	var servers []string
-	for aa := (*windows.IpAdapterAddresses)(unsafe.Pointer(&buf[0])); aa != nil; aa = aa.Next {
+	for aa := first; aa != nil; aa = aa.Next {
 		if aa.OperStatus != windows.IfOperStatusUp {
 			continue
 		}

@@ -6,6 +6,7 @@ package hostsys
 
 import (
 	"context"
+	"errors"
 	"os/user"
 	"strings"
 	"testing"
@@ -58,5 +59,19 @@ func TestUserWindows(t *testing.T) {
 	}
 	if uid, gid, groups := userCurrentIDs(); uid != 1000 || gid != 1000 || len(groups) != 0 {
 		t.Errorf("ids %d %d %v", uid, gid, groups)
+	}
+}
+
+// TestUserWindowsNoCurrent: without the current user, no user or group
+// exists.
+func TestUserWindowsNoCurrent(t *testing.T) {
+	current := userOSCurrent
+	t.Cleanup(func() { userOSCurrent = current })
+	userOSCurrent = func() (*user.User, error) { return nil, errors.New("no token") }
+	if _, ok := userFindUser(true, userWindowsID, ""); ok {
+		t.Error("a user without the current one")
+	}
+	if _, ok := userFindGroup(true, userWindowsID, ""); ok {
+		t.Error("a group without the current one")
 	}
 }
