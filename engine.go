@@ -78,9 +78,9 @@ func (engineValueless) Value(any) any { return nil }
 var ErrEngineClosed = errors.New("gophper: the engine is closed")
 
 // NewEngine prepares the runtime. The PHP binaries are compiled on first
-// use, or by Compile. Here and in every run, only ctx's deadline and
-// cancellation count. Its values, wazero's experimental settings among
-// them, are not passed on.
+// use, or by Compile. wazero sees only the deadline and cancellation of
+// ctx, here and in every run: its values, wazero's experimental settings
+// among them, are not passed on. A Function gets the run's ctx with them.
 func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 	ctx = engineValueless{ctx}
 	if engineWASMABIVersion != engineABIVersion {
@@ -190,9 +190,9 @@ func (e *Engine) Close(ctx context.Context) error {
 	e.mu.Unlock()
 	e.closeRuns()
 	e.runs.Wait()
-	err := e.runtime.Close(ctx)
+	err := e.runtime.Close(engineValueless{ctx})
 	if e.cache != nil {
-		err = errors.Join(err, e.cache.Close(ctx))
+		err = errors.Join(err, e.cache.Close(engineValueless{ctx}))
 	}
 	return err
 }
@@ -260,7 +260,10 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 			return 0, fmt.Errorf("gophper: MemoryLimit %d is below the %d bytes PHP starts with", opts.MemoryLimit, need)
 		}
 	}
-	ctx, cancel := context.WithCancel(engineValueless{ctx})
+	ctx, cancel := context.WithCancel(ctx)
+	// wazero gets the run's ctx without the caller's values. Functions get
+	// it with them, and with its cancel cause.
+	wctx := engineValueless{ctx}
 	defer cancel()
 	defer context.AfterFunc(e.closing, cancel)()
 	// PHPBinary's directory holds "php" for child processes too.
@@ -273,7 +276,7 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 	defer inst.sockets.Close()
 	defer inst.processes.Close()
 	defer inst.system.Close()
-	defer func() { err = errors.Join(err, inst.linker.Close(context.WithoutCancel(ctx))) }()
+	defer func() { err = errors.Join(err, inst.linker.Close(context.WithoutCancel(wctx))) }()
 
 	fs := opts.FS
 	if fs == nil {
@@ -331,11 +334,11 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 
 	// The VM allocates the linear memory, so that an interrupt can write
 	// to it while the module grows it.
-	m, err := e.runtime.InstantiateModule(experimental.WithMemoryAllocator(ctx, inst.vm), mod, mc)
+	m, err := e.runtime.InstantiateModule(experimental.WithMemoryAllocator(wctx, inst.vm), mod, mc)
 	if err != nil {
 		return 0, err
 	}
-	defer func() { err = errors.Join(err, m.Close(context.WithoutCancel(ctx))) }()
+	defer func() { err = errors.Join(err, m.Close(context.WithoutCancel(wctx))) }()
 	if err := inst.vm.Locate(m); err != nil {
 		return 0, err
 	}
@@ -352,7 +355,7 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 		go inst.forwardSignals(opts.Signals, done)
 	}
 
-	_, err = m.ExportedFunction("_start").Call(context.WithValue(ctx, engineInstanceKey{}, inst))
+	_, err = m.ExportedFunction("_start").Call(context.WithValue(wctx, engineInstanceKey{}, inst))
 	if exitErr, ok := errors.AsType[*sys.ExitError](err); ok {
 		code, err = int(exitErr.ExitCode()), nil
 	}

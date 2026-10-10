@@ -94,8 +94,9 @@ PHP gets nothing of the host unless `Options` says so:
 | `Signals` | Signals for PHP, as from `signal.Notify`. Handled ones run the `pcntl` handler. The rest end the run with exit code 128 plus the signal number. | No signals |
 
 > [!NOTE]
-> Only the deadline and the cancellation of a `ctx` reach PHP.
-> Its values are not passed on to wazero, so its experimental settings cannot get around these fields.
+> wazero gets only the deadline and the cancellation of a `ctx`.
+> Its values are not passed on, so wazero's experimental settings in them cannot get around these fields.
+> A `Function` still gets the values, and the cancel cause.
 
 `DefaultEngineConfig` keeps a per-user cache directory: wazero's compiled code, and the PHP binaries decompressed.
 With the cache, `gophper php -r 'echo 1;'` takes about 0.18 seconds.

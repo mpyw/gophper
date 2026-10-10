@@ -10,5 +10,6 @@ import "context"
 // same way, and slices, arrays and maps of other types work too. An error
 // becomes a RuntimeException in PHP, with its message.
 //
-// ctx is the run's. The script waits while the function runs.
+// ctx is the run's: the caller's, with its values and cancel cause, and
+// canceled when the run ends. The script waits while the function runs.
 type Function func(ctx context.Context, args []any) (any, error)

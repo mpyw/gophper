@@ -181,7 +181,7 @@ func TestDNSExchangeCanceledAsDialed(t *testing.T) {
 	})
 	// The race is the cancel's goroutine against the next statement, which
 	// no test can order. A second P makes it likely to show, not certain.
-	defer runtime.GOMAXPROCS(max(2, runtime.GOMAXPROCS(0)))
+	defer runtime.GOMAXPROCS(runtime.GOMAXPROCS(max(2, runtime.GOMAXPROCS(0))))
 	for _, network := range []string{"udp", "tcp"} {
 		t.Run(network, func(t *testing.T) {
 			var cancel context.CancelFunc

@@ -587,4 +587,26 @@ func TestRunIgnoresContextValues(t *testing.T) {
 	if n := listeners.made.Load(); n != 0 {
 		t.Errorf("%d function listeners", n)
 	}
+
+	// A Function gets them, and the cancel cause.
+	type key struct{}
+	ctx, cancel := context.WithCancelCause(context.WithValue(ctx, key{}, "request"))
+	defer cancel(nil)
+	stopped := errors.New("stopped by the caller")
+	var value any
+	var cause error
+	_, _ = e.RunCLI(ctx, gophper.Options{
+		Args: []string{"-r", "go_probe();"},
+		Functions: map[string]gophper.Function{
+			"go_probe": func(ctx context.Context, _ []any) (any, error) {
+				value = ctx.Value(key{})
+				cancel(stopped)
+				cause = context.Cause(ctx)
+				return nil, nil
+			},
+		},
+	})
+	if value != "request" || !errors.Is(cause, stopped) {
+		t.Errorf("a Function got %v, and the cause %v", value, cause)
+	}
 }
