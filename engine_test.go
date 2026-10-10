@@ -483,3 +483,35 @@ func TestEngineRunCanceledFirst(t *testing.T) {
 		t.Errorf("err = %v", err)
 	}
 }
+
+// TestEngineBrokenBinary fails the runs of a php.wasm that is damaged, as a
+// cache directory may hold one: not wasm, wasm that cannot compile, wasm
+// that cannot be instantiated, and wasm without what php.wasm exports.
+func TestEngineBrokenBinary(t *testing.T) {
+	// BuildID is the digests of php.wasm and php-cgi.wasm, of one length.
+	id := newTestEngine(t).BuildID()
+	const header = "\x00asm\x01\x00\x00\x00"
+	for _, tt := range []struct {
+		name, bin, want string
+	}{
+		{"not wasm", "damaged", "php.wasm: not a wasm module"},
+		{"another version", "\x00asm\x02\x00\x00\x00", "compile php.wasm:"},
+		// A type () -> (), and a function of it imported from "nosuch".
+		{"missing import", header + "\x01\x04\x01\x60\x00\x00" + "\x02\x0c\x01\x06nosuch\x01f\x00\x00", "nosuch"},
+		{"empty module", header, "does not export gophper_vm_interrupt"},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			dir := t.TempDir()
+			if err := os.MkdirAll(filepath.Join(dir, "wasm"), 0o755); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(dir, "wasm", id[:len(id)/2]+".wasm"), []byte(tt.bin), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			_, err := newEngineWith(t, gophper.EngineConfig{CacheDir: dir}).RunCLI(context.Background(), gophper.Options{Args: []string{"-r", "echo 1;"}})
+			if err == nil || !strings.Contains(err.Error(), tt.want) {
+				t.Errorf("err = %v, want %q", err, tt.want)
+			}
+		})
+	}
+}

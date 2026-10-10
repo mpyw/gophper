@@ -6,6 +6,8 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"os"
+	"path/filepath"
 	"testing"
 )
 
@@ -28,6 +30,18 @@ func TestHTTPBufferBody(t *testing.T) {
 		if _, _, _, err := httpBufferBody(failAfter(n)); !errors.Is(err, broken) {
 			t.Errorf("failing after %d bytes: %v", n, err)
 		}
+	}
+}
+
+// TestHTTPBufferBodyNoTempDir fails a body too large for memory when the
+// temporary directory it would go to is missing.
+func TestHTTPBufferBodyNoTempDir(t *testing.T) {
+	missing := filepath.Join(t.TempDir(), "missing")
+	// os.TempDir reads TMPDIR on Unix, and TMP first on Windows.
+	t.Setenv("TMPDIR", missing)
+	t.Setenv("TMP", missing)
+	if _, _, _, err := httpBufferBody(io.LimitReader(httpZeros{}, httpBodyMemory+10)); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("err = %v, want a missing directory", err)
 	}
 }
 

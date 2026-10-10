@@ -8,6 +8,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"syscall"
 	"testing"
 
@@ -137,6 +138,50 @@ func TestSystemLock(t *testing.T) {
 		}
 		if x.unlock(ctx, 5) != 0 {
 			t.Error("closing an fd without a lock failed")
+		}
+	})
+	t.Run("lock fails", func(t *testing.T) {
+		s, x := newSystemLocks(guestRun{ctx: ctx})
+		if lock(x, 3, file, systemLockShared) != 0 {
+			t.Fatal("fd 3 did not lock")
+		}
+		// The file kept for fd 3 went away under it: the error is no busy
+		// lock, and the fd keeps its file for unlock to find.
+		if err := s.locks[3].Close(); err != nil {
+			t.Fatal(err)
+		}
+		if got := lock(x, 3, file, systemLockExclusive); got != wasi.EIO {
+			t.Errorf("closed file: errno %d, want EIO", got)
+		}
+		if s.locks[3] == nil {
+			t.Error("fd 3 lost its file")
+		}
+		if x.unlock(ctx, 3) != 0 {
+			t.Error("unlock failed")
+		}
+	})
+
+	t.Run("lock unsupported", func(t *testing.T) {
+		// macOS has no flock(2) on a FIFO. The writer keeps the open from
+		// waiting for one.
+		if runtime.GOOS != "darwin" {
+			t.Skip("only macOS refuses flock(2) on a FIFO")
+		}
+		fifo := filepath.Join(t.TempDir(), "fifo")
+		if err := syscall.Mkfifo(fifo, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		w, err := os.OpenFile(fifo, os.O_RDWR, 0)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = w.Close() }() // nothing was written
+		s, x := newSystemLocks(guestRun{ctx: ctx})
+		if got := lock(x, 3, fifo, systemLockExclusive); got != wasi.EIO {
+			t.Errorf("FIFO: errno %d, want EIO", got)
+		}
+		if len(s.locks) != 0 {
+			t.Errorf("kept %d files", len(s.locks))
 		}
 	})
 }

@@ -45,3 +45,22 @@ func TestSystemLockFileWindows(t *testing.T) {
 		t.Errorf("shared beside shared: %v", err)
 	}
 }
+
+// TestSystemLockFileClosedWindows fails on a closed file, whose handle is
+// no longer valid, with the error of that and not as a busy lock.
+func TestSystemLockFileClosedWindows(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f")
+	if err := os.WriteFile(path, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := f.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := systemLockFile(f, systemLockExclusive); err == nil || errors.Is(err, errSystemLockBusy) {
+		t.Errorf("lock of a closed file: %v", err)
+	}
+}

@@ -238,6 +238,15 @@ func TestCLIHelp(t *testing.T) {
 	}
 }
 
+// TestCLIHelpUnknown prints the message of an error that carries its own
+// exit code, as urfave/cli's help does for a topic it lacks.
+func TestCLIHelpUnknown(t *testing.T) {
+	_, errOut, code := cliRun(t, t.TempDir(), "", "help", "nosuch")
+	if code != 3 || !strings.Contains(errOut, "gophper: No help topic for 'nosuch'") {
+		t.Errorf("exit %d: %s", code, errOut)
+	}
+}
+
 func TestCLIPHP(t *testing.T) {
 	dir := t.TempDir()
 	cliWrite(t, filepath.Join(dir, "args.php"), `<?php echo implode(",", array_slice($argv, 1)), "|", stream_get_contents(STDIN), "|", getcwd();`)
@@ -645,17 +654,21 @@ func TestCLIServeErrors(t *testing.T) {
 func TestCLIFastCGI(t *testing.T) {
 	dir := t.TempDir()
 	cliWrite(t, filepath.Join(dir, "index.php"), `<?php echo "fcgi ", $_GET["q"];`)
-	listens := []string{"127.0.0.1:0"}
-	if runtime.GOOS != "windows" {
-		listens = append(listens, "unix:"+filepath.Join(t.TempDir(), "php.sock"))
+	// Short: a Unix socket's path is at most about 100 bytes, Windows' too.
+	sockDir, err := os.MkdirTemp("", "g")
+	if err != nil {
+		t.Fatal(err)
 	}
+	t.Cleanup(func() { _ = os.RemoveAll(sockDir) })
+	listens := []string{"127.0.0.1:0", "unix:" + filepath.Join(sockDir, "php.sock")}
 	for _, listen := range listens {
 		t.Run(listen, func(t *testing.T) {
 			s := cliStart(t, dir, "fcgi", "--listen", listen, "--ping-path", "/ping")
 			network, addr := "tcp", s.addr
 			if path, ok := strings.CutPrefix(listen, "unix:"); ok {
 				network, addr = "unix", path
-				if fi, err := os.Stat(path); err != nil || fi.Mode().Perm() != 0o660 {
+				// Windows has no such mode: only whether it exists.
+				if fi, err := os.Stat(path); err != nil || (runtime.GOOS != "windows" && fi.Mode().Perm() != 0o660) {
 					t.Errorf("socket mode: %v %v", fi, err)
 				}
 			}
@@ -741,6 +754,27 @@ func TestCLIEngineErrors(t *testing.T) {
 		if code != 1 || !strings.Contains(errOut, "cache") {
 			t.Errorf("%s: exit %d: %s", args[0], code, errOut)
 		}
+	}
+}
+
+// TestCLIPHPBrokenBinary fails a run whose php.wasm is not wasm, as a
+// cache directory with a damaged binary in it gives.
+func TestCLIPHPBrokenBinary(t *testing.T) {
+	engine, err := gophper.NewEngine(context.Background(), gophper.EngineConfig{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// BuildID is the digests of php.wasm and php-cgi.wasm, of one length.
+	id := engine.BuildID()
+	if err := engine.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	cache := t.TempDir()
+	cliWrite(t, filepath.Join(cache, "wasm", id[:len(id)/2]+".wasm"), "damaged")
+	// The last --cache-dir wins over cliCommand's shared one.
+	_, errOut, code := cliRun(t, t.TempDir(), "", "--cache-dir", cache, "php", "-r", "echo 1;")
+	if code != 1 || !strings.Contains(errOut, "php.wasm: not a wasm module") {
+		t.Errorf("exit %d: %s", code, errOut)
 	}
 }
 

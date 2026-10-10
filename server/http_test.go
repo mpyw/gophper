@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -652,5 +653,42 @@ func TestHTTPClientGoneWhileStreaming(t *testing.T) {
 	// The instance is free again.
 	if _, body := get(t, srv.URL+"/stream.php?"); len(body) == 0 {
 		t.Error("no instance for the next request")
+	}
+}
+
+// httpUnflushable takes writes, but every flush fails, as a response does
+// once its client has gone.
+type httpUnflushable struct {
+	header http.Header
+	body   bytes.Buffer
+	status int
+}
+
+func (w *httpUnflushable) Header() http.Header         { return w.header }
+func (w *httpUnflushable) Write(p []byte) (int, error) { return w.body.Write(p) }
+func (w *httpUnflushable) WriteHeader(status int)      { w.status = status }
+func (w *httpUnflushable) FlushError() error           { return errors.New("the client is gone") }
+
+// TestHTTPFlushFails stops copying PHP's output once a flush fails, though
+// the write before it went through.
+func TestHTTPFlushFails(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "out.php"), []byte(`<?php echo "x";`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := gophper.NewEngine(context.Background(), gophper.DefaultEngineConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close(context.Background()) })
+	h, err := server.NewHTTPHandler(engine, server.HTTPConfig{Root: root, PHPConfig: server.PHPConfig{TempDir: t.TempDir(), NoWorkers: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+	w := &httpUnflushable{header: http.Header{}}
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/out.php", nil))
+	if w.status != http.StatusOK || w.body.String() != "x" {
+		t.Errorf("status %d, body %q", w.status, w.body.String())
 	}
 }

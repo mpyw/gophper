@@ -181,6 +181,21 @@ func TestPoolStopWaitsForStopping(t *testing.T) {
 
 // TestPoolHostPathStaysInside maps paths with ".." in them. None may leave
 // the mount it starts in: a sandboxed script could chmod any host file.
+// A php.ini file that cannot be written fails the pool, and leaves no
+// directory of files behind.
+func TestPoolINIFileUnwritable(t *testing.T) {
+	engine, err := gophper.NewEngine(context.Background(), gophper.DefaultEngineConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close(context.Background()) })
+	// A name under a directory that the php.ini directory lacks.
+	_, err = newPool(engine, PHPConfig{TempDir: t.TempDir(), NoWorkers: true, NoOpcache: true, ErrorLog: io.Discard}, map[string]string{"sub/x.php": ""})
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("err = %v, want a missing directory", err)
+	}
+}
+
 func TestPoolHostPathStaysInside(t *testing.T) {
 	p, vars := poolForTest(t)
 	root := filepath.Dir(vars["SCRIPT_FILENAME"])

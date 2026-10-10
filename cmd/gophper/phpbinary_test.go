@@ -3,7 +3,9 @@
 package main
 
 import (
+	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -211,5 +213,134 @@ func TestPHPBinaryParseArgs(t *testing.T) {
 	}
 	if got := phpBinaryParseArgs(""); got != nil {
 		t.Errorf("empty: %q", got)
+	}
+}
+
+// phpBinaryMade makes php.exe for exe under base, and returns the
+// directory it went in.
+func phpBinaryMade(t *testing.T, base, exe string) string {
+	t.Helper()
+	path, err := phpBinaryExe(base, exe, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return filepath.Dir(path)
+}
+
+// TestPHPBinaryExeBlocked fails where neither the link nor the copy can
+// take php.exe's place: a directory is in the way of each.
+func TestPHPBinaryExeBlocked(t *testing.T) {
+	exe := filepath.Join(t.TempDir(), "gophper.exe")
+	if err := os.WriteFile(exe, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	block := func(path string) {
+		t.Helper()
+		if err := os.MkdirAll(filepath.Join(path, "in-the-way"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	// The temporary name: the link fails, and so does the copy's rename.
+	base := t.TempDir()
+	dir := phpBinaryMade(t, base, exe)
+	if err := os.Remove(filepath.Join(dir, "php.exe")); err != nil {
+		t.Fatal(err)
+	}
+	block(filepath.Join(dir, ".php-"+strconv.Itoa(os.Getpid())+".exe"))
+	if _, err := phpBinaryExe(base, exe, nil); err == nil {
+		t.Error("a directory at the temporary name was accepted")
+	}
+
+	// php.exe itself: the rename fails, and a directory is no php.exe.
+	base = t.TempDir()
+	dir = phpBinaryMade(t, base, exe)
+	if err := os.Remove(filepath.Join(dir, "php.exe")); err != nil {
+		t.Fatal(err)
+	}
+	block(filepath.Join(dir, "php.exe"))
+	if _, err := phpBinaryExe(base, exe, nil); err == nil {
+		t.Error("a directory at php.exe was accepted")
+	}
+	if left, err := filepath.Glob(filepath.Join(dir, ".php-*")); err != nil || len(left) != 0 {
+		t.Errorf("left behind: %v, %v", left, err)
+	}
+}
+
+// TestPHPBinaryExeRunning keeps a php.exe that runs, which Windows does not
+// let a rename replace. Another run made it, from the same gophper.
+func TestPHPBinaryExeRunning(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("a rename replaces an open file on Unix")
+	}
+	exe := filepath.Join(t.TempDir(), "gophper.exe")
+	if err := os.WriteFile(exe, []byte("binary"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	base := t.TempDir()
+	dir := phpBinaryMade(t, base, exe)
+	// Without its options, it is made again, and the rename finds it open.
+	if err := os.Remove(filepath.Join(dir, phpBinaryArgsFile)); err != nil {
+		t.Fatal(err)
+	}
+	running, err := os.Open(filepath.Join(dir, "php.exe"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = running.Close() }() // read-only
+	if path, err := phpBinaryExe(base, exe, nil); err != nil || path != filepath.Join(dir, "php.exe") {
+		t.Errorf("%s, %v", path, err)
+	}
+}
+
+// TestPHPBinarySameMissing is false for a gophper that is gone, as when it
+// was replaced while running.
+func TestPHPBinarySameMissing(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "php.exe")
+	if err := os.WriteFile(path, nil, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if phpBinarySame(filepath.Join(t.TempDir(), "missing"), path) {
+		t.Error("a missing gophper is the same as php.exe")
+	}
+}
+
+// TestPHPBinaryWriteErrors leaves nothing at path when the temporary file
+// cannot be made, written or given its mode.
+func TestPHPBinaryWriteErrors(t *testing.T) {
+	broken := errors.New("broken")
+	path := filepath.Join(t.TempDir(), "file")
+	if err := phpBinaryWrite(path, 0o644, func(io.Writer) error { return broken }); !errors.Is(err, broken) {
+		t.Errorf("failed write: %v", err)
+	}
+	// The temporary file closed under it: the mode cannot be set.
+	if err := phpBinaryWrite(path, 0o644, func(w io.Writer) error {
+		f, ok := w.(*os.File)
+		if !ok {
+			return fmt.Errorf("%T is no file", w)
+		}
+		return f.Close()
+	}); !errors.Is(err, os.ErrClosed) {
+		t.Errorf("closed file: %v", err)
+	}
+	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("%s: %v", path, err)
+	}
+	if left, err := filepath.Glob(filepath.Join(filepath.Dir(path), ".php-*")); err != nil || len(left) != 0 {
+		t.Errorf("left behind: %v, %v", left, err)
+	}
+
+	// A directory only others may write to. Windows ignores a read-only
+	// directory, and root writes anywhere.
+	if runtime.GOOS == "windows" || os.Getuid() == 0 {
+		return
+	}
+	dir := filepath.Join(t.TempDir(), "ro")
+	if err := os.Mkdir(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) }) // so that TempDir can remove it
+	if err := phpBinaryWrite(filepath.Join(dir, "file"), 0o644, func(io.Writer) error { return nil }); !errors.Is(err, os.ErrPermission) {
+		t.Errorf("read-only directory: %v", err)
 	}
 }

@@ -12,6 +12,7 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
+	"io/fs"
 	"math/big"
 	"net/http"
 	"os"
@@ -19,7 +20,9 @@ import (
 	"runtime"
 	"slices"
 	"strings"
+	"syscall"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/mpyw/gophper"
@@ -159,6 +162,85 @@ func TestMainWriteErrors(t *testing.T) {
 		cmd.Writer, cmd.ErrWriter = &mainBrokenWriter{n: tt.n}, io.Discard
 		if err := cmd.Run(context.Background(), append([]string{"gophper"}, tt.args...)); err == nil || !strings.Contains(err.Error(), "broken pipe") {
 			t.Errorf("%v after %d writes: %v", tt.args, tt.n, err)
+		}
+	}
+}
+
+// mainUnresolvable returns a relative path that filepath.Abs fails on, and
+// the error it fails with. On Linux, getcwd(2) fails once the working
+// directory is removed. Windows refuses a NUL, though it keeps the working
+// directory from being removed. macOS resolves both, so it has no such path.
+func mainUnresolvable(t *testing.T) (string, error) {
+	t.Helper()
+	switch runtime.GOOS {
+	case "linux":
+		dir := filepath.Join(t.TempDir(), "gone")
+		if err := os.Mkdir(dir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		t.Chdir(dir)
+		if err := os.Remove(dir); err != nil {
+			t.Fatal(err)
+		}
+		return "rel", syscall.ENOENT
+	case "windows":
+		return "rel\x00", syscall.EINVAL
+	}
+	t.Skip("only Linux and Windows have a relative path that filepath.Abs cannot resolve")
+	return "", nil
+}
+
+// TestMainUnresolvablePaths reports each option whose relative path cannot
+// be made absolute, rather than going on with a path that means nothing.
+func TestMainUnresolvablePaths(t *testing.T) {
+	// PHP_BINARY's script goes here, not in the user's own directories.
+	t.Setenv("TMPDIR", t.TempDir())
+	t.Setenv("LOCALAPPDATA", t.TempDir())
+	mount := t.TempDir()
+	rel, want := mainUnresolvable(t)
+	for _, args := range [][]string{
+		{"--cache-dir", rel, "serve", "--mount", mount},
+		{"--no-cache", "--extension-dir", rel, "serve", "--mount", mount},
+		{"--no-cache", "serve", "--mount", rel},
+		{"--no-cache", "serve", "--mount", mount, "--root", rel},
+	} {
+		cmd := newRootCommand()
+		cmd.Writer, cmd.ErrWriter = io.Discard, io.Discard
+		if err := cmd.Run(context.Background(), append([]string{"gophper"}, args...)); !errors.Is(err, want) {
+			t.Errorf("%q: %v, want %v", args, err, want)
+		}
+	}
+	// php starts in the working directory, which Linux cannot name.
+	if runtime.GOOS == "linux" {
+		cmd := newRootCommand()
+		cmd.Writer, cmd.ErrWriter = io.Discard, io.Discard
+		if err := cmd.Run(context.Background(), []string{"gophper", "--no-cache", "php", "-r", ""}); !errors.Is(err, want) {
+			t.Errorf("php: %v, want %v", err, want)
+		}
+	}
+}
+
+// mainBrokenFS lists one file, which it cannot open; with list unset, it
+// cannot list either.
+type mainBrokenFS struct{ list bool }
+
+func (f mainBrokenFS) Open(name string) (fs.File, error) {
+	if name == "." && f.list {
+		return fstest.MapFS{"php.txt": {}}.Open(".")
+	}
+	return nil, &fs.PathError{Op: "open", Path: name, Err: fs.ErrPermission}
+}
+
+// TestLicensesUnreadable reports licenses that cannot be listed or read,
+// rather than printing fewer of them.
+func TestLicensesUnreadable(t *testing.T) {
+	defer func(old fs.FS) { licensesFiles = old }(licensesFiles)
+	for _, list := range []bool{false, true} {
+		licensesFiles = mainBrokenFS{list: list}
+		cmd := newRootCommand()
+		cmd.Writer, cmd.ErrWriter = io.Discard, io.Discard
+		if err := cmd.Run(context.Background(), []string{"gophper", "licenses"}); !errors.Is(err, fs.ErrPermission) {
+			t.Errorf("listing works %v: %v", list, err)
 		}
 	}
 }

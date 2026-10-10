@@ -272,6 +272,25 @@ func TestProcessAbsolutePath(t *testing.T) {
 	}
 }
 
+// TestProcessReadAheadSocket refuses a socket end that PHP has read from:
+// what was read ahead would be lost to the child. The program is this test
+// binary, which every OS can run, but it never starts.
+func TestProcessReadAheadSocket(t *testing.T) {
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, code := runPHP(t, fmt.Sprintf(`
+		[$a, $b] = stream_socket_pair(STREAM_PF_UNIX, STREAM_SOCK_STREAM, STREAM_IPPROTO_IP);
+		fwrite($b, "x");
+		echo fread($a, 1), " ";
+		var_dump(@proc_open([%q, "-test.run=^$"], [0 => $a], $pipes));
+	`, gophper.HostToGuest(exe)))
+	if code != 0 || out != "x bool(false)\n" {
+		t.Errorf("exit %d: %q", code, out)
+	}
+}
+
 // TestProcessStreamedStdin starts a child while the instance's stdin is a
 // stream with nothing to read yet. The child gets a pipe, so waiting for it
 // does not wait for the next input as well.

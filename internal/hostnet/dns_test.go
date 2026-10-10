@@ -216,6 +216,7 @@ func TestDNSExchange(t *testing.T) {
 	}
 	ctx := context.Background()
 	noTCP := func([]byte) []byte { t.Error("asked over TCP"); return nil }
+	noUDP := func([]byte) [][]byte { t.Error("asked over UDP"); return nil }
 
 	// Packets that are too short or for another query are skipped.
 	server := dnsTestServer(t, func(q []byte) [][]byte {
@@ -244,6 +245,11 @@ func TestDNSExchange(t *testing.T) {
 		if a, err := dnsExchange(ctx, server, q, id); err == nil {
 			t.Errorf("%s over TCP: % x", name, a)
 		}
+	}
+
+	// A query too long for one datagram is refused when it is sent.
+	if a, err := dnsExchange(ctx, dnsTestUDPOnly(t, noUDP), make([]byte, 70000), id); err == nil {
+		t.Errorf("oversized query: % x", a)
 	}
 
 	canceled, cancel := context.WithCancel(ctx)

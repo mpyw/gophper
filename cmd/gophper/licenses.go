@@ -24,18 +24,22 @@ import (
 //go:embed modlicenses.txt
 var licensesModules string
 
+// licensesFiles are the licenses of what php.wasm holds. A variable, so
+// that a test can make reading them fail.
+var licensesFiles fs.FS = phpwasm.Licenses
+
 // licensesAction prints what a distributor of gophper must pass on.
 func licensesAction(_ context.Context, cmd *cli.Command) error {
 	w := cmd.Root().Writer
 	if _, err := fmt.Fprintf(w, "gophper\n\n%s\n", gophper.License); err != nil {
 		return err
 	}
-	entries, err := fs.ReadDir(phpwasm.Licenses, ".")
+	entries, err := fs.ReadDir(licensesFiles, ".")
 	if err != nil {
 		return err
 	}
 	for _, e := range entries {
-		b, err := fs.ReadFile(phpwasm.Licenses, e.Name())
+		b, err := fs.ReadFile(licensesFiles, e.Name())
 		if err != nil {
 			return err
 		}
