@@ -42,8 +42,11 @@ jobs:
       # wazero and gophper-wasm versions, which make the compiled code.
       - uses: actions/cache@v6
         with:
+          # bin holds PHP_BINARY's scripts and php.exe copies, made anew
+          # for each run's own gophper.
           path: |
             ${{ runner.temp }}/gophper-test-cache
+            !${{ runner.temp }}/gophper-test-cache/bin
             ~/.cache/gophper
             ~/Library/Caches/gophper
             ~/AppData/Local/gophper

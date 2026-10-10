@@ -21,7 +21,9 @@ type PHPConfig struct {
 	// INI holds php.ini lines, such as "max_execution_time=30".
 	INI []string
 	// Env holds environment variables for PHP, as KEY=VALUE. The host
-	// environment is not passed (php-fpm's clear_env).
+	// environment is not passed (php-fpm's clear_env). A request's own CGI
+	// variables, such as SERVER_NAME and QUERY_STRING, are dropped: each
+	// request sets them.
 	Env []string
 	// ErrorLog receives PHP's stderr and gophper's own errors. Nil means os.Stderr.
 	ErrorLog io.Writer

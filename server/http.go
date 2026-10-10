@@ -14,6 +14,7 @@ import (
 	"os"
 	"path"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -83,15 +84,18 @@ func NewHTTPHandler(engine *gophper.Engine, cfg HTTPConfig) (*HTTPHandler, error
 		cfg.Router = filepath.Join(root, cfg.Router)
 	}
 
-	p, err := newPool(engine, cfg.PHPConfig, map[string]string{"router.php": httpBootstrapRouter})
-	if err != nil {
+	// Before newPool, which may compile php-cgi.wasm for seconds first.
+	if err := poolCheckMounts(cfg.Mounts); err != nil {
 		return nil, err
 	}
 	for _, dir := range []string{root, cfg.Router} {
-		if dir != "" && !p.mounted(dir) {
-			_ = p.close() // the mount error is the one to report
+		if dir != "" && !slices.ContainsFunc(cfg.Mounts, func(m Mount) bool { return m.contains(dir) }) {
 			return nil, fmt.Errorf("%s is outside every mount", dir)
 		}
+	}
+	p, err := newPool(engine, cfg.PHPConfig, map[string]string{"router.php": httpBootstrapRouter})
+	if err != nil {
+		return nil, err
 	}
 	// The router runs from the directory the server started in, as with
 	// php -S, when PHP can reach it. Otherwise, from the document root.

@@ -692,3 +692,23 @@ func TestHTTPFlushFails(t *testing.T) {
 		t.Errorf("status %d, body %q", w.status, w.body.String())
 	}
 }
+
+// TestHTTPEnvWithCGIVariables starts with CGI variables in Env. php-cgi
+// took the start-up check for a request, and a QUERY_STRING of -s kept a
+// worker from listening. They are dropped: each request sets its own.
+func TestHTTPEnvWithCGIVariables(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "index.php"), []byte(`<?php echo getenv("SERVER_NAME") ?: "none", " ", getenv("APP") ?: "none";`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for _, noWorkers := range []bool{false, true} {
+		srv := startHTTPWith(t, func(cfg *server.HTTPConfig) {
+			cfg.Root = root
+			cfg.NoWorkers = noWorkers
+			cfg.Env = []string{"SERVER_NAME=configured", "GATEWAY_INTERFACE=CGI/1.1", "REQUEST_METHOD=GET", "QUERY_STRING=-s", "APP=yes"}
+		})
+		if res, body := get(t, srv.URL+"/"); res.StatusCode != 200 || !strings.HasSuffix(body, " yes") {
+			t.Errorf("NoWorkers %v: %d %q", noWorkers, res.StatusCode, body)
+		}
+	}
+}

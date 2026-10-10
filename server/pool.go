@@ -146,13 +146,8 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 	if cfg.MemoryLimit < 0 {
 		return nil, fmt.Errorf("memory limit %d is negative", cfg.MemoryLimit)
 	}
-	for _, m := range cfg.Mounts {
-		if !filepath.IsAbs(m.Dir) {
-			return nil, fmt.Errorf("mount %q: not an absolute path", m.Dir)
-		}
-		if fi, err := os.Stat(m.Dir); err != nil || !fi.IsDir() {
-			return nil, fmt.Errorf("mount %q: not a directory", m.Dir)
-		}
+	if err := poolCheckMounts(cfg.Mounts); err != nil {
+		return nil, err
 	}
 
 	var opcacheDir string
@@ -228,7 +223,7 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 		processes:   !cfg.NoProcesses,
 		network:     !cfg.NoNetwork,
 		memoryLimit: cfg.MemoryLimit,
-		env:         cfg.Env,
+		env:         slices.DeleteFunc(slices.Clone(cfg.Env), poolRequestVariable),
 		iniDir:      iniDir,
 		sem:         make(chan struct{}, concurrency),
 		maxWait:     cfg.MaxWaitTime,
@@ -259,6 +254,32 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 		return nil, errors.Join(err, p.close())
 	}
 	return p, nil
+}
+
+// poolCheckMounts checks that each mount is an absolute path to a
+// directory.
+//
+//declscope:shared // http.go checks them before its own paths
+func poolCheckMounts(mounts []Mount) error {
+	for _, m := range mounts {
+		if !filepath.IsAbs(m.Dir) {
+			return fmt.Errorf("mount %q: not an absolute path", m.Dir)
+		}
+		if fi, err := os.Stat(m.Dir); err != nil || !fi.IsDir() {
+			return fmt.Errorf("mount %q: not a directory", m.Dir)
+		}
+	}
+	return nil
+}
+
+// poolRequestVariable reports a CGI variable of a request in "KEY=VALUE".
+// Each request sets its own, so one in Env does nothing there. php-cgi
+// takes itself for a CGI request when one of the first four is set, and
+// skips its own arguments, -b too, for a query string that starts with
+// "-": a worker would not listen.
+func poolRequestVariable(kv string) bool {
+	k, _, _ := strings.Cut(kv, "=")
+	return slices.Contains([]string{"SERVER_SOFTWARE", "SERVER_NAME", "GATEWAY_INTERFACE", "REQUEST_METHOD", "QUERY_STRING"}, k)
 }
 
 // checkStart starts php-cgi -v as each instance starts: its php.ini and
