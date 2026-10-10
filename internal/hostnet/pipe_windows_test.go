@@ -10,9 +10,11 @@ import (
 	"time"
 )
 
-// TestSocketPipeCloseLateRead closes a read end whose read starts only
-// after the first cancel. Close alone would wait on that read for ever,
-// as nothing writes. It is cancelled again, and the end closes.
+// TestSocketPipeCloseLateRead cancels again and again until the read
+// ends: this read starts only after the first cancel, and nothing writes.
+// One cancel and then the wait for the read would hang here. The file is
+// closed only after the read, so the read blocks in ReadFile rather than
+// failing on a closed file.
 func TestSocketPipeCloseLateRead(t *testing.T) {
 	r, w, err := os.Pipe()
 	if err != nil {
@@ -44,8 +46,10 @@ func TestSocketPipeCloseLateRead(t *testing.T) {
 	}
 }
 
-// TestSocketPipeCloseWhileReading closes a pipe read ahead, many times,
-// as PHP's end of a pipe is when the request ends.
+// TestSocketPipeCloseWhileReading closes a pipe's read end while it is
+// read ahead and its writer is still open, many times. The hang needs the
+// read to enter ReadFile just after Go's own cancel, so this only makes
+// it likely to show, rather than certain.
 func TestSocketPipeCloseWhileReading(t *testing.T) {
 	for range 200 {
 		h := newSocketHarness(t)
@@ -54,6 +58,9 @@ func TestSocketPipeCloseWhileReading(t *testing.T) {
 		}
 		h.tab.mu.Lock()
 		h.tab.startReading(h.tab.entries[1])
+		// The write end stays open, so only the cancel can end the read.
+		w := h.tab.entries[2].conn
+		delete(h.tab.entries, 2)
 		h.tab.mu.Unlock()
 		closed := make(chan struct{})
 		go func() {
@@ -65,5 +72,6 @@ func TestSocketPipeCloseWhileReading(t *testing.T) {
 		case <-time.After(10 * time.Second):
 			t.Fatal("Close hangs on a pipe read ahead")
 		}
+		_ = w.Close() // nothing reads it any more
 	}
 }
