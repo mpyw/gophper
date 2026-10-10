@@ -14,6 +14,8 @@ import (
 	"testing"
 
 	phpext "github.com/mpyw/gophper-wasm/ext"
+	"github.com/tetratelabs/wazero/experimental"
+	"github.com/tetratelabs/wazero/experimental/sock"
 
 	"github.com/mpyw/gophper"
 )
@@ -230,5 +232,33 @@ func redisFake(conn net.Conn, data *sync.Map) {
 		default:
 			_, _ = fmt.Fprint(conn, "-ERR unknown command\r\n")
 		}
+	}
+}
+
+// TestDLIgnoresContextValues: a side module that dl() loads is compiled
+// and instantiated without the caller's ctx values too. A socket config
+// would fail its instantiation on the taken port, and the listener
+// factory would trace its functions.
+func TestDLIgnoresContextValues(t *testing.T) {
+	e := newExtensionEngine(t)
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = taken.Close() }()
+	addr, ok := taken.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("%T is no TCP address", taken.Addr())
+	}
+	listeners := &engineTestListeners{}
+	ctx := experimental.WithFunctionListenerFactory(context.Background(), listeners)
+	ctx = sock.WithConfig(ctx, sock.NewConfig().WithTCPListener("127.0.0.1", addr.Port))
+	var out bytes.Buffer
+	code, err := e.RunCLI(ctx, gophper.Options{Args: []string{"-r", `var_dump(dl("dl_test.so"), dl_test_test2("dl"));`}, Stdout: &out, Stderr: &out})
+	if err != nil || code != 0 || !strings.Contains(out.String(), `string(8) "Hello dl"`) {
+		t.Errorf("exit %d, %v\n%s", code, err, out.String())
+	}
+	if n := listeners.made.Load(); n != 0 {
+		t.Errorf("%d function listeners", n)
 	}
 }
