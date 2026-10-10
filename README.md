@@ -18,40 +18,11 @@ It is the real Zend Engine, so the language behaves exactly like PHP.
 > [!WARNING]
 > This is an experiment. The API will change.
 
-| | |
-| --- | --- |
-| PHP | php-src, compiled to `wasm32-wasip1` |
-| Runtime | wazero. Pure Go, with no cgo. |
-| PHP binaries | From [gophper-wasm](https://github.com/mpyw/gophper-wasm), a Go module that embeds them. Its README lists the versions of PHP and of every library inside. |
-| Build needs | Only Go. No C compiler. |
-| Forms | A Go library, and the `gophper` command |
+The PHP binaries come from [gophper-wasm](https://github.com/mpyw/gophper-wasm), a Go module that embeds them.
+Its README lists the versions of PHP and of every library inside.
+Only Go is needed, with no C compiler.
 
-## Contents
-
-- [Quick start](#quick-start)
-- [Library](#library)
-- [Command](#command)
-- [Extensions](#extensions)
-- [Examples](#examples)
-- [What works](#what-works)
-- [Windows](#windows)
-- [Performance](#performance)
-- [License](#license)
-
-## Quick start
-
-As a command:
-
-```sh
-mise use -g github:mpyw/gophper
-gophper php -r 'echo "Hello from ", PHP_OS, "\n";'
-```
-
-```
-Hello from WASI
-```
-
-As a library:
+## Usage: As a Library
 
 ```sh
 go get github.com/mpyw/gophper
@@ -71,28 +42,7 @@ code, err := engine.RunCLI(ctx, gophper.Options{
 })
 ```
 
-## Library
-
-### Packages
-
-| Package | Contents |
-| --- | --- |
-| `github.com/mpyw/gophper` | `Engine`. It runs the CLI or the CGI SAPI once per call. |
-| `github.com/mpyw/gophper/server` | `HTTPHandler`, an `http.Handler`, and `FastCGIServer`. Both take a `PHPConfig`. |
-
-### Engine
-
-| Call | What it does |
-| --- | --- |
-| `NewEngine(ctx, cfg)` | Prepares the runtime. The PHP binaries compile on first use. |
-| `Engine.RunCLI(ctx, opts)` | Runs the PHP CLI SAPI and returns its exit code |
-| `Engine.RunCGI(ctx, opts)` | Runs php-cgi once in CGI mode and returns its exit code. The request comes from CGI variables in `Env`, and the body from `Stdin`. The raw response goes to `Stdout`, headers included. |
-| `Engine.Compile(ctx)` | Compiles both binaries now, ahead of the first run |
-| `Engine.Close(ctx)` | Cancels the runs in progress and waits for them. Then it releases the runtime. A later run returns `ErrEngineClosed`. |
-
-Extensions load from `EngineConfig.ExtensionDir`. See [Extensions](#extensions).
-
-### Serve HTTP from your own server
+To serve a PHP app from your own `http.Server`:
 
 ```go
 h, err := server.NewHTTPHandler(engine, server.HTTPConfig{Root: "public"})
@@ -103,11 +53,7 @@ defer h.Close()
 return http.ListenAndServe("127.0.0.1:8080", h)
 ```
 
-`HTTPConfig` and `FastCGIConfig` have the same settings as the [`serve`](#gophper-serve) and [`fcgi`](#gophper-fcgi) options.
-
-### Call Go from PHP
-
-`Options.Functions` adds PHP functions written in Go:
+PHP can call functions written in Go:
 
 ```go
 code, err := engine.RunCLI(ctx, gophper.Options{
@@ -121,6 +67,89 @@ code, err := engine.RunCLI(ctx, gophper.Options{
 })
 ```
 
+> [!IMPORTANT]
+> PHP gets nothing of the host unless `Options` says so: no files, no processes, no network.
+> See [Sandbox](#sandbox).
+
+> [!WARNING]
+> With an empty cache, the first run compiles PHP to machine code, which takes a while.
+> See [Compile cache](#compile-cache).
+
+## Usage: As a Tool
+
+Install with [mise](https://mise.jdx.dev/), or see [Install](#install) for other ways:
+
+```sh
+mise use -g github:mpyw/gophper
+```
+
+Run PHP:
+
+```sh
+gophper php -r 'echo "Hello from ", PHP_OS, "\n";'
+```
+
+```
+Hello from WASI
+```
+
+Serve a Laravel app over HTTP, from the project directory:
+
+```sh
+cd my-app
+gophper serve --root public
+```
+
+Or run a FastCGI server, like php-fpm, for nginx or Caddy:
+
+```sh
+gophper fcgi --listen unix:/run/gophper.sock --mount /var/www -d max_execution_time=30
+```
+
+> [!TIP]
+> A symlink named `php` that points to `gophper` behaves like `gophper php`.
+
+## Examples
+
+[`examples/`](examples) is a Go module of its own. It uses the released gophper.
+
+| Example | What it shows |
+| --- | --- |
+| `fibonacci` | A Go function that PHP calls, against the same recursion in PHP |
+| `todos` | A Laravel 13 app with Blade only |
+| `todos-serve` | `todos` over HTTP, with `server.HTTPHandler` |
+| `todos-fcgi` | `todos` as a FastCGI server, with FrankenPHP in front as the web server |
+
+## References
+
+- Library: [Packages](#packages), [Engine](#engine), [Go functions](#go-functions), [Sandbox](#sandbox), [Compile cache](#compile-cache)
+- Tool: [Install](#install), [Commands](#commands), [Global options](#global-options), [gophper php](#gophper-php), [gophper serve](#gophper-serve), [gophper fcgi](#gophper-fcgi), [Options for serve and fcgi](#options-for-serve-and-fcgi)
+- Both: [Extensions](#extensions), [What works](#what-works), [Windows](#windows)
+
+### Packages
+
+| Package | Contents |
+| --- | --- |
+| `github.com/mpyw/gophper` | `Engine`. It runs the CLI or the CGI SAPI once per call. |
+| `github.com/mpyw/gophper/server` | `HTTPHandler`, an `http.Handler`, and `FastCGIServer`. Both take a `PHPConfig`. |
+
+`HTTPConfig` and `FastCGIConfig` have the same settings as the [`serve`](#gophper-serve) and [`fcgi`](#gophper-fcgi) options.
+
+### Engine
+
+| Call | What it does |
+| --- | --- |
+| `NewEngine(ctx, cfg)` | Prepares the runtime. The PHP binaries compile on first use. |
+| `Engine.RunCLI(ctx, opts)` | Runs the PHP CLI SAPI and returns its exit code |
+| `Engine.RunCGI(ctx, opts)` | Runs php-cgi once in CGI mode and returns its exit code. The request comes from CGI variables in `Env`, and the body from `Stdin`. The raw response goes to `Stdout`, headers included. |
+| `Engine.Compile(ctx)` | Compiles both binaries now, ahead of the first run |
+| `Engine.Close(ctx)` | Cancels the runs in progress and waits for them. Then it releases the runtime. A later run returns `ErrEngineClosed`. |
+
+Extensions load from `EngineConfig.ExtensionDir`. See [Extensions](#extensions).
+
+### Go functions
+
+`Options.Functions` maps PHP function names to Go functions.
 Values convert like this, in both directions:
 
 | PHP | Go |
@@ -152,11 +181,7 @@ PHP gets nothing of the host unless `Options` says so:
 
 `DefaultEngineConfig` keeps a per-user cache directory.
 It holds wazero's compiled code, and the PHP binaries decompressed.
-
-| Run | Time |
-| --- | --- |
-| `gophper php -r 'echo 1;'`, with the cache | About 0.18 seconds |
-
+With the cache, `gophper php -r 'echo 1;'` takes about 0.18 seconds.
 Most of it is wazero validating the 16 MB binary, which it does even with the cache.
 
 > [!WARNING]
@@ -171,8 +196,6 @@ Most of it is wazero validating the 16 MB binary, which it does even with the ca
 > | `server.NewHTTPHandler`, `server.NewFastCGIServer` | php-cgi.wasm, before they return, so the first request does not wait |
 >
 > With `CacheDir` empty, as with `EngineConfig{}`, every new `Engine` compiles again.
-
-## Command
 
 ### Install
 
@@ -201,9 +224,6 @@ gophper version v0.1.0 (PHP 8.6.0RC3, gophper-wasm v0.2.3, wazero v1.12.0, go1.2
 | `gophper extension list` / `install NAME...` | Lists or installs the extensions that come with gophper. See [Extensions](#extensions). |
 | `gophper licenses` | Prints the licenses of gophper and everything in it |
 
-> [!TIP]
-> A symlink named `php` that points to `gophper` behaves like `gophper php`.
-
 ### Global options
 
 These go before the subcommand:
@@ -218,22 +238,10 @@ gophper --extension-dir DIR serve
 | `--cache-dir DIR` | Where compiled code is kept between runs. Default: the user cache directory. |
 | `--no-cache` | Compile the PHP binaries on every start |
 
-Each option also reads an environment variable: `GOPHPER_` and its name in upper snake case.
-
-| Option | Variable |
-| --- | --- |
-| `--max-wait-time` | `GOPHPER_MAX_WAIT_TIME` |
-| `--extension-dir` | `GOPHPER_EXTENSION_DIR` |
+Each option of every command also reads an environment variable: `GOPHPER_` and its name in upper snake case.
+For example, `--max-wait-time` reads `GOPHPER_MAX_WAIT_TIME`.
 
 ### gophper php
-
-```sh
-gophper php -r 'echo "Hello from ", PHP_OS, "\n";'
-```
-
-```
-Hello from WASI
-```
 
 The CLI mounts the host file system at `/`. It starts in the current directory.
 
@@ -277,7 +285,7 @@ Requests are routed like Caddy's `php_server`:
 | `--front-controller FILE` | Runs for paths that are not files. `off` answers 404. Default: `index.php` |
 | `--split-path SUFFIX` | Ends a script's path, before `PATH_INFO`. Repeatable. Default: `.php` |
 | `--no-static` | Answers files other than scripts with 404 |
-| `--max-body SIZE` | Limits request bodies, such as `64M`. `0` means no limit. Default: `64M`. See the note below. |
+| `--max-body SIZE` | Limits request bodies, such as `64M`. `0` means no limit. Default: `64M`. |
 | `--domain NAME` | Serves HTTPS with a Let's Encrypt certificate. Repeatable. Also listens on `:80` for the challenge. |
 | `--tls-cert FILE`, `--tls-key FILE` | Serves HTTPS with these files |
 
@@ -286,23 +294,14 @@ Requests are routed like Caddy's `php_server`:
 > Beyond 1 MiB, it waits in a file in the system's temporary directory.
 > With `--max-body 0`, that file can grow without limit.
 
-For a Laravel app, run from the project directory:
-
-```sh
-cd my-app
-gophper serve --root public
-```
-
+For a Laravel-style layout, run from the project directory.
 `--mount` defaults to the current directory, so PHP reaches `vendor/` and `storage/` outside `public/`.
 [`examples/todos`](examples) is a Laravel 13 app that runs this way.
 
 > [!TIP]
 > For HTTP/3, compression or several sites in one server, put a web server in front.
->
-> | Web server | Points at |
-> | --- | --- |
-> | Caddy's `reverse_proxy` | `gophper serve` |
-> | Caddy's `php_fastcgi`, nginx's `fastcgi_pass` | `gophper fcgi` |
+> Caddy's `reverse_proxy` can point at `gophper serve`.
+> Caddy's `php_fastcgi` and nginx's `fastcgi_pass` can point at `gophper fcgi`.
 
 ### gophper fcgi
 
@@ -314,15 +313,12 @@ The web server chooses the script, as with php-fpm.
 
 | Option | Meaning | php-fpm equivalent |
 | --- | --- | --- |
-| `--listen ADDR` | TCP address, or `unix:/path/to.sock`. Default: `127.0.0.1:9000`. See the note below. | `listen` |
+| `--listen ADDR` | TCP address, or `unix:/path/to.sock`. Default: `127.0.0.1:9000`. Linux abstract sockets (`unix:@name`) are refused, as they have no permissions. | `listen` |
 | `--listen-mode MODE` | Permissions of a Unix socket. Default: `0660` | `listen.mode` |
 | `--allowed-clients ADDR` | An address or prefix that may connect over TCP. Repeatable. Default: any | `listen.allowed_clients` |
 | `--limit-extensions EXT` | An extension a script may have. Repeatable. Default: `.php` and `.phar` | `security.limit_extensions` |
 | `--ping-path PATH` | Answers `pong` | `ping.path` |
 | `--status-path PATH` | Answers counters as text | `pm.status_path` |
-
-> [!NOTE]
-> Linux abstract sockets (`unix:@name`) are refused, as they have no permissions.
 
 nginx:
 
@@ -358,7 +354,7 @@ example.com {
 | `--temp-dir DIR` | Mounted at `/tmp` inside PHP. Default: the system's. In Go, `TempDir` must be an absolute path. | |
 | `--no-processes` | Stops PHP from starting host programs (`proc_open`, `exec` and the rest) | `disable_functions` |
 | `--no-network` | Stops PHP from using TCP, UDP and DNS. Unix sockets inside the mounts still work. | |
-| `--memory-max SIZE` | Caps each PHP instance's memory, such as `512M`. `memory_limit` cannot lift it. Default: none. See the note below. | |
+| `--memory-max SIZE` | Caps each PHP instance's memory, such as `512M`. `memory_limit` cannot lift it. A worker's opcache takes 64 MB of it, so a worker needs about 96M. serve and fcgi refuse a cap PHP cannot start under. Default: none | |
 | `--no-workers` | Starts a fresh PHP instance for each request | |
 | `--max-requests N` | Requests a worker serves before it is replaced. Default: 500 | `pm.max_requests` |
 | `--opcache-dir DIR` | Where opcache keeps compiled scripts between requests. Default: the user cache directory | |
@@ -370,24 +366,17 @@ example.com {
 | `-e KEY=VALUE` | An environment variable for PHP. Repeatable. | `env[KEY]` |
 | `--access-log FILE` | Appends an access log. `-` means stdout. | `access.log` |
 
-> [!NOTE]
-> A worker's opcache takes 64 MB of `--memory-max`, so a worker needs about 96M.
-> serve and fcgi refuse a cap PHP cannot start under.
-
 > [!IMPORTANT]
 > PHP sees only `--mount` directories, `/tmp` and its own php.ini.
 > The host environment is not passed to PHP, as with php-fpm's `clear_env`.
 > The default php.ini sets `variables_order=GPCS`, as `php.ini-production` does.
 
 > [!WARNING]
-> PHP may start a child process by default, as with php-fpm.
-> A child runs outside the mounts, with the rights of the server.
-> Use `--no-processes` to stop it.
->
-> PHP may also reach the server's network by default, as with php-fpm.
-> Use `--no-network` to stop it.
+> A child process runs outside the mounts, with the rights of the server.
+> PHP may start one by default, as with php-fpm. Use `--no-processes` to stop it.
+> PHP may also reach the server's network by default, as with php-fpm. Use `--no-network` to stop it.
 
-## Extensions
+### Extensions
 
 Extensions load at runtime, as `.so` files do in native PHP.
 Each one is a WebAssembly module, so one file runs on every platform.
@@ -415,12 +404,7 @@ Hello ext
 | Environment | `GOPHPER_EXTENSION_DIR=DIR` |
 | Go | `EngineConfig.ExtensionDir` |
 
-| Way to load one | Example |
-| --- | --- |
-| php.ini | `extension=<name>` |
-| A flag | `-d extension=<name>` |
-| PHP code | `dl("<name>.so")` |
-
+`extension=<name>` in php.ini, `-d extension=<name>`, and `dl("<name>.so")` all work.
 Your own extensions go in the same directory.
 
 > [!IMPORTANT]
@@ -441,18 +425,7 @@ These come with gophper:
 | `zip` | `ZipArchive`, with AES encryption |
 | `dl_test` | php-src's extension for testing `dl()` |
 
-## Examples
-
-[`examples/`](examples) is a Go module of its own. It uses the released gophper.
-
-| Example | What it shows |
-| --- | --- |
-| `fibonacci` | A Go function that PHP calls, against the same recursion in PHP |
-| `todos` | A Laravel 13 app with Blade only |
-| `todos-serve` | `todos` over HTTP, with `server.HTTPHandler` |
-| `todos-fcgi` | `todos` as a FastCGI server, with FrankenPHP in front as the web server |
-
-## What works
+### What works
 
 | Feature | Status |
 | --- | --- |
@@ -460,7 +433,7 @@ These come with gophper:
 | Fatal errors, `exit()`, shutdown functions | Works |
 | `max_execution_time`, `set_time_limit()` | Works. The timer runs in Go, since WASI has no signals. |
 | `pcntl`: signals, `pcntl_alarm()`, `pcntl_waitpid()` | Works. `gophper php` passes `SIGINT`, `SIGTERM`, `SIGHUP`, `SIGUSR1` and others to PHP, so `artisan queue:work` stops cleanly. `pcntl_fork()` fails. `pcntl_exec()` runs the program as a child and exits with its status. |
-| opcache | Works in `serve` and `fcgi`. See [opcache](#opcache). The CLI leaves opcache off, as native PHP does. |
+| opcache | In `serve` and `fcgi`, each worker keeps compiled scripts in its own shared memory, 64 MB. A file cache keeps them between workers, and for fresh instances. Raise the size with `-d opcache.memory_consumption=128`. The CLI leaves opcache off, as native PHP does. |
 | Sockets | Tested: TCP clients and servers, UDP and Unix clients, `stream_select`, and the `http://` wrapper |
 | DNS | Works, through Go's resolver |
 | `date`, `pcre`, `hash`, `json`, `random`, `spl`, `uri`, `lexbor` | Works |
@@ -487,16 +460,7 @@ These come with gophper:
 > Go cannot preempt WebAssembly. PHP gives the Go scheduler a turn every so many VM instructions.
 > A long loop inside one C function, such as a huge `preg_match`, holds its thread until it returns.
 
-### opcache
-
-| Where | Cache |
-| --- | --- |
-| A worker in `serve` and `fcgi` | Its own shared memory, 64 MB |
-| Between workers, and for fresh instances | A file cache |
-
-Raise the size with `-d opcache.memory_consumption=128`.
-
-## Windows
+### Windows
 
 gophper runs on Windows too. These differ from Unix:
 
@@ -514,7 +478,7 @@ gophper runs on Windows too. These differ from Unix:
 
 ## Performance
 
-All numbers are from an Apple Silicon Mac.
+On an Apple Silicon Mac:
 
 | Benchmark | Native PHP 8.5 (`php -n`) | gophper |
 | --- | --- | --- |
@@ -541,14 +505,8 @@ Laravel 13's welcome page with `gophper serve`, one request at a time:
 
 gophper's own code is under the [MIT License](LICENSE).
 
-A gophper binary also contains these, and each keeps its own license:
-
-| Part | From |
-| --- | --- |
-| PHP and the libraries built into it | gophper-wasm |
-| Go modules | Linked in at build time |
-
-`gophper licenses` prints them all, with the license of each Go module linked in.
+A gophper binary also contains PHP and the libraries built into it, from gophper-wasm, and Go modules.
+Each keeps its own license. `gophper licenses` prints them all, with the license of each Go module linked in.
 
 > [!IMPORTANT]
 > To distribute a gophper binary, pass on what `gophper licenses` prints.
