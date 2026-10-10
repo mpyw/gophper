@@ -11,7 +11,8 @@ import (
 type Options struct {
 	// Args are passed to PHP, excluding argv[0].
 	Args []string
-	// Env holds environment variables in "KEY=VALUE" form.
+	// Env holds environment variables in "KEY=VALUE" form. GOPHPER_CWD is
+	// left out: it is Dir's.
 	Env []string
 	// Dir is the working directory PHP starts in. It must be inside FS.
 	// Empty means "/". WASI has no inherited working directory.

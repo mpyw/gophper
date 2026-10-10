@@ -515,3 +515,32 @@ func TestEngineBrokenBinary(t *testing.T) {
 		})
 	}
 }
+
+// TestEngineDirNotFromEnv ignores GOPHPER_CWD in Env, which compat reads
+// to change directory: only Dir sets it. php-cgi looks for php.ini in the
+// working directory, so Env could have loaded another one.
+func TestEngineDirNotFromEnv(t *testing.T) {
+	dir, other := t.TempDir(), t.TempDir()
+	run := func(dir string) string {
+		t.Helper()
+		var out bytes.Buffer
+		_, err := newTestEngine(t).RunCLI(context.Background(), gophper.Options{
+			Args:   []string{"-r", `echo getcwd();`},
+			Env:    []string{"GOPHPER_CWD=" + gophper.HostToGuest(other)},
+			Dir:    dir,
+			FS:     gophper.HostFS(),
+			Stdout: &out,
+			Stderr: &out,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out.String()
+	}
+	if got := run(""); got == gophper.HostToGuest(other) {
+		t.Errorf("without Dir: Env's directory %q", got)
+	}
+	if got, want := run(gophper.HostToGuest(dir)), gophper.HostToGuest(dir); !strings.EqualFold(got, want) {
+		t.Errorf("with Dir: %q, want %q", got, want)
+	}
+}

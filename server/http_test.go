@@ -709,7 +709,7 @@ func TestHTTPEnvWithCGIVariables(t *testing.T) {
 	if err := os.Mkdir(other, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, f := range []string{"php.ini", "zz.ini"} {
+	for _, f := range []string{"php.ini", "php-cgi-fcgi.ini", "zz.ini"} {
 		if err := os.WriteFile(filepath.Join(other, f), []byte("cgi.fix_pathinfo=0\nmemory_limit=7M\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -722,6 +722,9 @@ func TestHTTPEnvWithCGIVariables(t *testing.T) {
 				"SERVER_NAME=configured", "GATEWAY_INTERFACE=CGI/1.1", "REQUEST_METHOD=GET", "QUERY_STRING=-s",
 				"PHPRC=" + gophper.HostToGuest(other), "PHP_INI_SCAN_DIR=" + gophper.HostToGuest(other),
 				"PHP_FCGI_CHILDREN=2", "PHP_FCGI_BACKLOG=100000",
+				// compat changes to it before main(), and php-cgi looks for
+				// php.ini in the working directory.
+				"GOPHPER_CWD=" + gophper.HostToGuest(other),
 				"APP=yes",
 			}
 		})

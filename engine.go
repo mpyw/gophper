@@ -293,14 +293,16 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 	if opts.Stderr != nil {
 		mc = mc.WithStderr(opts.Stderr)
 	}
+	for _, kv := range opts.Env {
+		// GOPHPER_CWD is Dir's, never Env's: php-cgi looks for php.ini in
+		// the working directory too, so it could load another one.
+		if k, v, ok := strings.Cut(kv, "="); ok && k != "GOPHPER_CWD" {
+			mc = mc.WithEnv(k, v)
+		}
+	}
 	if opts.Dir != "" {
 		// Read by a constructor in gophper-wasm's compat/, before main().
 		mc = mc.WithEnv("GOPHPER_CWD", opts.Dir)
-	}
-	for _, kv := range opts.Env {
-		if k, v, ok := strings.Cut(kv, "="); ok {
-			mc = mc.WithEnv(k, v)
-		}
 	}
 
 	// The VM allocates the linear memory, so that an interrupt can write

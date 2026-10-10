@@ -849,3 +849,35 @@ func TestFastCGIParamsDoNotLoadINI(t *testing.T) {
 		t.Errorf("cgi.fix_pathinfo = %q, want 1\n%s", res.Body, res.Stderr)
 	}
 }
+
+// TestFastCGIParamNamesWithEquals sends params whose names hold "=", to
+// fresh instances, which take params as their environment. A name such as
+// PHP_INI_SCAN_DIR=/x: would set PHP_INI_SCAN_DIR, and one such as
+// SCRIPT_FILENAME=/up.jpg/ would replace the script. They are dropped.
+func TestFastCGIParamNamesWithEquals(t *testing.T) {
+	addr, root := startFCGIScripts(t, map[string]string{
+		"index.php": `<?php echo "index ", ini_get("cgi.fix_pathinfo");`,
+		"up.jpg":    `<?php echo "uploaded";`,
+	}, func(cfg *server.FastCGIConfig) { cfg.NoWorkers = true })
+	conf := filepath.Join(root, "conf")
+	if err := os.Mkdir(conf, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(conf, "zz.ini"), []byte("cgi.fix_pathinfo=0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	extra := map[string]string{
+		"PHP_INI_SCAN_DIR=" + gophper.HostToGuest(conf) + ":":                         "",
+		"SCRIPT_FILENAME=" + gophper.HostToGuest(filepath.Join(root, "up.jpg")) + "/": "",
+	}
+	// Map order decided which of two SCRIPT_FILENAMEs won, so a few times.
+	for range 10 {
+		res, err := dialFCGI(t, addr).do(1, false, params(root, "GET", "/index.php", extra), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Body != "index 1" {
+			t.Fatalf("got %q, want index 1\n%s", res.Body, res.Stderr)
+		}
+	}
+}

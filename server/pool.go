@@ -224,7 +224,8 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 		network:     !cfg.NoNetwork,
 		memoryLimit: cfg.MemoryLimit,
 		env: slices.DeleteFunc(slices.Clone(cfg.Env), func(kv string) bool {
-			return poolVariable(kv, poolRequestVariables) || poolVariable(kv, poolStartVariables)
+			// GOPHPER_ names are gophper's own, set by the engine and the router.
+			return poolVariable(kv, poolRequestVariables) || poolVariable(kv, poolStartVariables) || strings.HasPrefix(kv, "GOPHPER_")
 		}),
 		iniDir:    iniDir,
 		sem:       make(chan struct{}, concurrency),
@@ -393,8 +394,10 @@ func (p *pool) run(ctx context.Context, vars map[string]string, stdin io.Reader,
 	env := slices.Clone(p.env)
 	for k, v := range vars {
 		// A fresh php-cgi takes the request's variables as its environment,
-		// so a web server's FastCGI params could change how it starts.
-		if !slices.Contains(poolStartVariables, k) {
+		// so a web server's FastCGI params could change how it starts. No
+		// environment holds a name with "=" or NUL: PHPRC=/x: would be read
+		// as PHPRC, and SCRIPT_FILENAME=/up.jpg/ would replace the script.
+		if !slices.Contains(poolStartVariables, k) && !strings.ContainsAny(k, "=\x00") {
 			env = append(env, k+"="+v)
 		}
 	}
