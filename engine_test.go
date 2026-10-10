@@ -551,6 +551,8 @@ func TestEngineDirNotFromEnv(t *testing.T) {
 }
 
 // engineTestListeners counts the functions wazero would have traced.
+//
+//declscope:shared // extension_test.go counts them for dl() too
 type engineTestListeners struct{ made atomic.Int64 }
 
 func (f *engineTestListeners) NewFunctionListener(api.FunctionDefinition) experimental.FunctionListener {
