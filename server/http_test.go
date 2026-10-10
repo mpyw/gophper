@@ -706,6 +706,43 @@ func TestHTTPFlushFails(t *testing.T) {
 	}
 }
 
+// httpUnwritable fails every write, as a response does once its client
+// has gone.
+type httpUnwritable struct {
+	httpUnflushable
+	writes int
+}
+
+func (w *httpUnwritable) Write([]byte) (int, error) {
+	w.writes++
+	return 0, errors.New("the client is gone")
+}
+
+// TestHTTPWriteFails stops copying PHP's output at the first write that
+// fails. TestHTTPClientGoneWhileStreaming gets there only when the client
+// leaves before a write rather than during a flush.
+func TestHTTPWriteFails(t *testing.T) {
+	root := t.TempDir()
+	if err := os.WriteFile(filepath.Join(root, "out.php"), []byte(`<?php echo "x"; flush(); echo "y";`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	engine, err := gophper.NewEngine(context.Background(), gophper.DefaultEngineConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close(context.Background()) })
+	h, err := server.NewHTTPHandler(engine, server.HTTPConfig{Root: root, PHPConfig: server.PHPConfig{TempDir: t.TempDir(), NoWorkers: true}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = h.Close() })
+	w := &httpUnwritable{httpUnflushable: httpUnflushable{header: http.Header{}}}
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/out.php", nil))
+	if w.status != http.StatusOK || w.writes != 1 {
+		t.Errorf("status %d, %d writes", w.status, w.writes)
+	}
+}
+
 // TestHTTPEnvWithCGIVariables starts with variables in Env that php-cgi
 // reads itself. A request's CGI variables made it take the start-up check
 // for a request, and a QUERY_STRING of -s kept a worker from listening.
