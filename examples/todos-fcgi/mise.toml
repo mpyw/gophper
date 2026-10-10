@@ -1,0 +1,11 @@
+[tools]
+"github:php/frankenphp" = "1.13.0"
+
+[env]
+# The Caddyfile's root. It must be absolute: Caddy passes it on in
+# SCRIPT_FILENAME, and gophper only runs scripts inside its mounts.
+TODOS_ROOT = "{{ config_root | dirname }}/todos"
+
+[tasks.web]
+description = "Serve HTTP on 127.0.0.1:8080 with FrankenPHP, in front of todos-fcgi"
+run = "frankenphp run --config Caddyfile --adapter caddyfile"

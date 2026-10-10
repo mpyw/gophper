@@ -32,6 +32,7 @@ linters:
           files:
             - $all
             - "!**/cmd/**"
+            - "!**/examples/**"
           deny:
             - pkg: log
               desc: return the error, or write to a caller's io.Writer
@@ -45,6 +46,7 @@ linters:
             - $all
             - "!$test"
             - "!**/cmd/**"
+            - "!**/examples/**"
             - "!**/internal/**"
             - "!**/server/**"
             - "!**/testdata/**"
@@ -90,6 +92,17 @@ linters:
             - github.com/mpyw/gophper/server$
             - github.com/mpyw/gophper-wasm$
             - github.com/mpyw/gophper-wasm/ext$
+
+        # The examples use only what a library user can import.
+        examples:
+          list-mode: strict
+          files:
+            - "**/examples/**"
+          allow:
+            - $gostd
+            - github.com/tetratelabs/wazero
+            - github.com/mpyw/gophper$
+            - github.com/mpyw/gophper/server$
 
         # The FastCGI protocol stands alone.
         fcgi:
