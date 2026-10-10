@@ -364,6 +364,8 @@ type socketEntry struct {
 	// reading ahead would take its input.
 	lazy    bool
 	reading bool
+	// readDone is closed once the read ahead of a pipe's read end ends.
+	readDone chan struct{}
 
 	nodelay, keepalive, reuseaddr, broadcast bool
 	rcvbuf, sndbuf                           int32
@@ -396,7 +398,9 @@ func (e *socketEntry) network() string {
 func (e *socketEntry) close() func() {
 	e.closed = true
 	var closers []io.Closer
-	if e.conn != nil {
+	if p, ok := e.conn.(socketPipeConn); ok && e.readDone != nil {
+		closers = append(closers, socketPipeReader{p.File, e.readDone})
+	} else if e.conn != nil {
 		closers = append(closers, e.conn)
 	}
 	if e.listener != nil {

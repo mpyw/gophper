@@ -56,7 +56,16 @@ func (t *Sockets) startReading(e *socketEntry) {
 		return
 	}
 	e.reading = true
-	go t.readStream(e, e.conn)
+	if e.pipe != socketPipeRead {
+		go t.readStream(e, e.conn)
+		return
+	}
+	done := make(chan struct{})
+	e.readDone = done
+	go func() {
+		defer close(done)
+		t.readStream(e, e.conn)
+	}()
 }
 
 // ChildFile returns the host file for the guest fd, to give a child process,
@@ -98,6 +107,15 @@ func (socketPipeConn) LocalAddr() net.Addr  { return socketPipeAddr{} }
 func (socketPipeConn) RemoteAddr() net.Addr { return socketPipeAddr{} }
 
 type socketPipeAddr struct{}
+
+// socketPipeReader closes a pipe's read end that is read ahead, once the
+// read has ended. See socketPipeClose.
+type socketPipeReader struct {
+	file *os.File
+	done <-chan struct{}
+}
+
+func (r socketPipeReader) Close() error { return socketPipeClose(r.file, r.done) }
 
 func (socketPipeAddr) Network() string { return "pipe" }
 func (socketPipeAddr) String() string  { return "" }
