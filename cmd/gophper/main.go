@@ -616,12 +616,11 @@ func serveRun(ctx context.Context, root string, servers []*http.Server) error {
 		}()
 	}
 
+	// Nothing shuts a server down before the select ends, so an error from
+	// Serve is never http.ErrServerClosed: it is a failure.
 	var err error
 	select {
 	case err = <-errs:
-		if errors.Is(err, http.ErrServerClosed) {
-			err = nil
-		}
 	case <-ctx.Done():
 	}
 	shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -690,6 +689,10 @@ func fcgiAction(ctx context.Context, cmd *cli.Command) (err error) {
 	if strings.HasPrefix(listen, "unix:@") && (runtime.GOOS == "linux" || runtime.GOOS == "android") {
 		return fmt.Errorf("--listen %s: an abstract socket has no permissions; use a path", listen)
 	}
+	// Linux would bind an abstract socket of its own choosing for no path.
+	if listen == "unix:" {
+		return errors.New("--listen unix: needs a socket path")
+	}
 
 	engine, err := newEngine(ctx, cmd)
 	if err != nil {
@@ -702,6 +705,20 @@ func fcgiAction(ctx context.Context, cmd *cli.Command) (err error) {
 	}
 	defer func() { err = errors.Join(err, srv.Close()) }()
 
+	l, err := fcgiListen(listen, os.FileMode(mode))
+	if err != nil {
+		return err
+	}
+	logf(os.Stderr, "gophper: FastCGI on %s\n", l.Addr())
+	return srv.Serve(ctx, l)
+}
+
+// fcgiChmod is a var so that a test can see the chmod fail, as a security
+// module or a FUSE filesystem may refuse it.
+var fcgiChmod = os.Chmod
+
+// fcgiListen listens on a TCP address, or on unix:path with mode.
+func fcgiListen(listen string, mode os.FileMode) (net.Listener, error) {
 	network, address := "tcp", listen
 	if path, ok := strings.CutPrefix(listen, "unix:"); ok {
 		network, address = "unix", path
@@ -710,15 +727,14 @@ func fcgiAction(ctx context.Context, cmd *cli.Command) (err error) {
 	}
 	l, err := net.Listen(network, address)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if network == "unix" {
-		if err := os.Chmod(address, os.FileMode(mode)); err != nil {
-			return errors.Join(err, l.Close())
+		if err := fcgiChmod(address, mode); err != nil {
+			return nil, errors.Join(err, l.Close())
 		}
 	}
-	logf(os.Stderr, "gophper: FastCGI on %s\n", l.Addr())
-	return srv.Serve(ctx, l)
+	return l, nil
 }
 
 func extensionListAction(_ context.Context, cmd *cli.Command) error {

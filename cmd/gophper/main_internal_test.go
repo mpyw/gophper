@@ -161,6 +161,31 @@ func TestServeRunFails(t *testing.T) {
 	}
 }
 
+// TestFCGIListenChmodFails closes the socket when its mode cannot be set.
+func TestFCGIListenChmodFails(t *testing.T) {
+	// Short: a Unix socket's path is at most about 100 bytes, Windows' too.
+	dir, err := os.MkdirTemp("", "g")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	chmod := fcgiChmod
+	t.Cleanup(func() { fcgiChmod = chmod })
+	fcgiChmod = func(string, os.FileMode) error { return os.ErrPermission }
+	sock := filepath.Join(dir, "php.sock")
+	if l, err := fcgiListen("unix:"+sock, 0o660); !errors.Is(err, os.ErrPermission) {
+		if l != nil {
+			_ = l.Close()
+		}
+		t.Fatalf("err = %v", err)
+	}
+	// Closed: nothing answers there.
+	if c, err := net.Dial("unix", sock); err == nil {
+		_ = c.Close()
+		t.Error("the socket still listens")
+	}
+}
+
 // serveTestCertificate writes a self-signed certificate and its key.
 func serveTestCertificate(t *testing.T) (cert, key string) {
 	t.Helper()

@@ -171,6 +171,10 @@ func phpBinaryCopy(src, dst string) error {
 	})
 }
 
+// phpBinaryClose is a var so that a test can fail it, as NFS may with a
+// write it deferred to the close.
+var phpBinaryClose = (*os.File).Close
+
 // phpBinaryWrite writes a file under a temporary name, then renames it, so
 // that a concurrent run never sees half of it.
 func phpBinaryWrite(path string, mode fs.FileMode, write func(io.Writer) error) error {
@@ -190,7 +194,7 @@ func phpBinaryWrite(path string, mode fs.FileMode, write func(io.Writer) error) 
 	if err := tmp.Chmod(mode); err != nil {
 		return errors.Join(err, tmp.Close())
 	}
-	if err := tmp.Close(); err != nil {
+	if err := phpBinaryClose(tmp); err != nil {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)

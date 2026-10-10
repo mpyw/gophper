@@ -758,8 +758,12 @@ func TestCLIEngineErrors(t *testing.T) {
 }
 
 // TestCLIFastCGIAbstractSocket refuses Linux's abstract sockets, which
-// --listen-mode cannot restrict, and leaves a file of that name alone.
+// --listen-mode cannot restrict, and leaves a file of that name alone. A
+// socket without a path is refused on every OS.
 func TestCLIFastCGIAbstractSocket(t *testing.T) {
+	if _, errOut, code := cliRun(t, t.TempDir(), "", "fcgi", "--listen", "unix:"); code != 1 || !strings.Contains(errOut, "needs a socket path") {
+		t.Errorf("no path: exit %d: %s", code, errOut)
+	}
 	if runtime.GOOS != "linux" {
 		t.Skip("@name is a file name here")
 	}

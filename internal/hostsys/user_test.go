@@ -152,6 +152,12 @@ func TestUserIDsAndHostName(t *testing.T) {
 	if n := userHostName(context.Background(), m, out, 1); n != 1 {
 		t.Errorf("truncated host name: %d, want 1", n)
 	}
+	hostname := userOSHostname
+	userOSHostname = func() (string, error) { return "", errors.New("no name") }
+	defer func() { userOSHostname = hostname }()
+	if n := userHostName(context.Background(), m, out, 255); n != -wasi.EIO {
+		t.Errorf("no host name: %d, want %d", n, -wasi.EIO)
+	}
 }
 
 // TestUserLookupFallback is the build without cgo on macOS: /etc/passwd

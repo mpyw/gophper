@@ -359,6 +359,14 @@ func TestPHPBinaryWriteErrors(t *testing.T) {
 	}); !errors.Is(err, os.ErrClosed) {
 		t.Errorf("closed file: %v", err)
 	}
+	// A close that fails, as NFS may report a write there.
+	closeFile := phpBinaryClose
+	phpBinaryClose = func(f *os.File) error { return errors.Join(broken, closeFile(f)) }
+	err := phpBinaryWrite(path, 0o644, func(io.Writer) error { return nil })
+	phpBinaryClose = closeFile
+	if !errors.Is(err, broken) {
+		t.Errorf("failed close: %v", err)
+	}
 	if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 		t.Errorf("%s: %v", path, err)
 	}

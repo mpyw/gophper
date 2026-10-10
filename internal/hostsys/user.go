@@ -66,11 +66,15 @@ func userGet(_ context.Context, m api.Module, kind, id int32, namePtr, nameLen, 
 	return int32(len(text))
 }
 
+// userOSHostname is a var so that a test can see os.Hostname fail, as it
+// may in a sandbox with neither uname's name nor /proc to read it from.
+var userOSHostname = os.Hostname
+
 // userHostName writes the host name, and returns its length or -errno.
 //
 //declscope:shared // system.go exports it
 func userHostName(_ context.Context, m api.Module, out uint32, capacity int32) int32 {
-	name, err := os.Hostname()
+	name, err := userOSHostname()
 	if err != nil {
 		return -wasi.EIO
 	}
