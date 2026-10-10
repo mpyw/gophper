@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"net"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,10 +12,14 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/tetratelabs/wazero"
+	"github.com/tetratelabs/wazero/api"
+	"github.com/tetratelabs/wazero/experimental"
+	"github.com/tetratelabs/wazero/experimental/sock"
 
 	"github.com/mpyw/gophper"
 )
@@ -542,5 +547,44 @@ func TestEngineDirNotFromEnv(t *testing.T) {
 	}
 	if got, want := run(gophper.HostToGuest(dir)), gophper.HostToGuest(dir); !strings.EqualFold(got, want) {
 		t.Errorf("with Dir: %q, want %q", got, want)
+	}
+}
+
+// engineTestListeners counts the functions wazero would have traced.
+type engineTestListeners struct{ made atomic.Int64 }
+
+func (f *engineTestListeners) NewFunctionListener(api.FunctionDefinition) experimental.FunctionListener {
+	f.made.Add(1)
+	return nil
+}
+
+// TestRunIgnoresContextValues: wazero's experimental settings in the
+// caller's ctx do not reach PHP. A socket config would have every guest
+// module listen, here on a port taken already, and fail the run.
+func TestRunIgnoresContextValues(t *testing.T) {
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = taken.Close() }()
+	addr, ok := taken.Addr().(*net.TCPAddr)
+	if !ok {
+		t.Fatalf("%T is no TCP address", taken.Addr())
+	}
+	port := addr.Port
+	listeners := &engineTestListeners{}
+	ctx := experimental.WithFunctionListenerFactory(context.Background(), listeners)
+	ctx = sock.WithConfig(ctx, sock.NewConfig().WithTCPListener("127.0.0.1", port))
+	e, err := gophper.NewEngine(ctx, gophper.DefaultEngineConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = e.Close(context.Background()) })
+	var out bytes.Buffer
+	if code, err := e.RunCLI(ctx, gophper.Options{Args: []string{"-r", "echo 1;"}, Stdout: &out}); err != nil || code != 0 || out.String() != "1" {
+		t.Errorf("exit %d, %q, %v", code, out.String(), err)
+	}
+	if n := listeners.made.Load(); n != 0 {
+		t.Errorf("%d function listeners", n)
 	}
 }

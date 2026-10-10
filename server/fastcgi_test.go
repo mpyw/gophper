@@ -543,6 +543,7 @@ func TestFastCGIConfigErrors(t *testing.T) {
 			AllowedClients: []string{"10.0.0.0/8", "localhost"},
 		}, `allowed client "localhost": not an address or prefix`},
 		{"relative mount", server.FastCGIConfig{PHPConfig: server.PHPConfig{Mounts: []server.Mount{{Dir: "www"}}}}, `mount "www": not an absolute path`},
+		{"relative temp dir", server.FastCGIConfig{PHPConfig: server.PHPConfig{Mounts: []server.Mount{{Dir: dir}}, TempDir: "tmp"}}, `temp directory "tmp": not an absolute path`},
 		{"mount is a file", server.FastCGIConfig{PHPConfig: server.PHPConfig{Mounts: []server.Mount{{Dir: file}}}}, "not a directory"},
 		{"missing mount", server.FastCGIConfig{PHPConfig: server.PHPConfig{Mounts: []server.Mount{{Dir: filepath.Join(dir, "nope")}}}}, "not a directory"},
 	} {

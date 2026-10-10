@@ -405,7 +405,6 @@ func engineConfig(cmd *cli.Command) (gophper.EngineConfig, error) {
 // the access log.
 func phpConfig(cmd *cli.Command) (server.PHPConfig, func() error, error) {
 	cfg := server.PHPConfig{
-		TempDir:     cmd.String("temp-dir"),
 		NoProcesses: cmd.Bool("no-processes"),
 		NoNetwork:   cmd.Bool("no-network"),
 		OpcacheDir:  cmd.String("opcache-dir"),
@@ -415,6 +414,13 @@ func phpConfig(cmd *cli.Command) (server.PHPConfig, func() error, error) {
 		Concurrency: cmd.Int("concurrency"),
 		MaxWaitTime: cmd.Duration("max-wait-time"),
 		Env:         cmd.StringSlice("env"),
+	}
+	if dir := cmd.String("temp-dir"); dir != "" {
+		abs, err := filepath.Abs(dir)
+		if err != nil {
+			return cfg, nil, err
+		}
+		cfg.TempDir = abs
 	}
 	if s := cmd.String("memory-max"); s != "" {
 		n, err := parseSize(s)
@@ -746,6 +752,13 @@ func extensionListAction(_ context.Context, cmd *cli.Command) error {
 	return nil
 }
 
+// extensionOpen and extensionOpenFile are vars so that a test can be a
+// broken copy of gophper-wasm, as a replace directive may give.
+var (
+	extensionOpen     = phpext.Open
+	extensionOpenFile = phpext.OpenFile
+)
+
 func extensionInstallAction(_ context.Context, cmd *cli.Command) error {
 	dir := cmd.Root().String("extension-dir")
 	switch {
@@ -761,7 +774,7 @@ func extensionInstallAction(_ context.Context, cmd *cli.Command) error {
 		if !slices.Contains(phpext.Names(), name) {
 			return fmt.Errorf("extension install: no extension %q (%s)", name, strings.Join(phpext.Names(), ", "))
 		}
-		so, err := phpext.Open(name)
+		so, err := extensionOpen(name)
 		if err != nil {
 			return err
 		}
@@ -774,7 +787,7 @@ func extensionInstallAction(_ context.Context, cmd *cli.Command) error {
 		}
 		// Such as intl's ICU data, which it reads from the same directory.
 		for _, file := range phpext.Files(name) {
-			b, err := phpext.OpenFile(name, file)
+			b, err := extensionOpenFile(name, file)
 			if err != nil {
 				return err
 			}

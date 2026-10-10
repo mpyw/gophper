@@ -31,6 +31,18 @@ import (
 // engineABIVersion is the phpwasm.ABIVersion this host implements.
 const engineABIVersion = 2
 
+// gophper-wasm's ABI version and binaries, and the host modules' setup,
+// are vars so that a test can be a gophper-wasm of another version or a
+// broken copy, or an OS that refuses wazero memory for the host modules'
+// code, as at vm.max_map_count.
+var (
+	engineWASMABIVersion  = phpwasm.ABIVersion
+	engineCLIBinary       = phpwasm.CLI
+	engineCGIBinary       = phpwasm.CGI
+	engineInstantiateWASI = wasi_snapshot_preview1.Instantiate
+	engineInstantiateHost = wazero.HostModuleBuilder.Instantiate
+)
+
 // Engine compiles the PHP binaries once and runs them many times.
 // It is safe for concurrent use. Each run gets a fresh PHP instance.
 type Engine struct {
@@ -53,14 +65,26 @@ type Engine struct {
 	runs      sync.WaitGroup
 }
 
+// engineValueless keeps a ctx's deadline and cancellation, and hides its
+// values. wazero reads experimental settings from them: function listeners,
+// a socket config that has every guest module listen on TCP, a memory
+// allocator, an import resolver. From the caller's ctx, they would bypass
+// Network, MemoryLimit and the host functions.
+type engineValueless struct{ context.Context }
+
+func (engineValueless) Value(any) any { return nil }
+
 // ErrEngineClosed is returned by a run that starts after Close.
 var ErrEngineClosed = errors.New("gophper: the engine is closed")
 
 // NewEngine prepares the runtime. The PHP binaries are compiled on first
-// use, or by Compile.
+// use, or by Compile. Here and in every run, only ctx's deadline and
+// cancellation count. Its values, wazero's experimental settings among
+// them, are not passed on.
 func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
-	if phpwasm.ABIVersion != engineABIVersion {
-		return nil, fmt.Errorf("github.com/mpyw/gophper-wasm has ABI version %d, but this gophper implements %d; use matching versions", phpwasm.ABIVersion, engineABIVersion)
+	ctx = engineValueless{ctx}
+	if engineWASMABIVersion != engineABIVersion {
+		return nil, fmt.Errorf("github.com/mpyw/gophper-wasm has ABI version %d, but this gophper implements %d; use matching versions", engineWASMABIVersion, engineABIVersion)
 	}
 
 	// WithCloseOnContextDone is left off: its checks made PHP 3.8 times slower.
@@ -80,7 +104,7 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 	}
 	e.runtime = wazero.NewRuntimeWithConfig(ctx, rc)
 	e.dylink = dylink.NewCache(e.runtime)
-	if _, err := wasi_snapshot_preview1.Instantiate(ctx, e.runtime); err != nil {
+	if _, err := engineInstantiateWASI(ctx, e.runtime); err != nil {
 		return nil, errors.Join(err, e.Close(ctx))
 	}
 	host := e.runtime.NewHostModuleBuilder("gophper")
@@ -92,12 +116,12 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 	hostsys.ExportSystem(host, engineFrom(func(i *engineInstance) *hostsys.System { return i.system }))
 	hostfn.ExportFunctions(host, engineFrom(func(i *engineInstance) *hostfn.Functions { return i.functions }))
 	hostnet.ExportDNS(host, engineFrom(func(i *engineInstance) *hostnet.Sockets { return i.sockets }))
-	if _, err := host.Instantiate(ctx); err != nil {
+	if _, err := engineInstantiateHost(host, ctx); err != nil {
 		return nil, errors.Join(err, e.Close(ctx))
 	}
 
 	// Compilation must outlive the ctx of the first run that triggers it.
-	compileCtx := context.WithoutCancel(ctx)
+	compileCtx := context.WithoutCancel(ctx) // valueless, as above
 	compile := func(name string, bin func() ([]byte, error), digest string) func() (wazero.CompiledModule, error) {
 		return sync.OnceValues(func() (wazero.CompiledModule, error) {
 			b, err := engineBinary(cfg.CacheDir, bin, digest)
@@ -114,8 +138,8 @@ func NewEngine(ctx context.Context, cfg EngineConfig) (*Engine, error) {
 			return m, nil
 		})
 	}
-	e.cliModule = compile("php.wasm", phpwasm.CLI, phpwasm.CLIDigest)
-	e.cgiModule = compile("php-cgi.wasm", phpwasm.CGI, phpwasm.CGIDigest)
+	e.cliModule = compile("php.wasm", engineCLIBinary, phpwasm.CLIDigest)
+	e.cgiModule = compile("php-cgi.wasm", engineCGIBinary, phpwasm.CGIDigest)
 	return e, nil
 }
 
@@ -236,7 +260,7 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 			return 0, fmt.Errorf("gophper: MemoryLimit %d is below the %d bytes PHP starts with", opts.MemoryLimit, need)
 		}
 	}
-	ctx, cancel := context.WithCancel(ctx)
+	ctx, cancel := context.WithCancel(engineValueless{ctx})
 	defer cancel()
 	defer context.AfterFunc(e.closing, cancel)()
 	// PHPBinary's directory holds "php" for child processes too.

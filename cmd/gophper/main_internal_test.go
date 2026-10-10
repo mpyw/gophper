@@ -284,6 +284,7 @@ func TestMainUnresolvablePaths(t *testing.T) {
 		{"--no-cache", "--extension-dir", rel, "serve", "--mount", mount},
 		{"--no-cache", "serve", "--mount", rel},
 		{"--no-cache", "serve", "--mount", mount, "--root", rel},
+		{"--no-cache", "serve", "--mount", mount, "--temp-dir", rel},
 	} {
 		cmd := newRootCommand()
 		cmd.Writer, cmd.ErrWriter = io.Discard, io.Discard
@@ -297,6 +298,27 @@ func TestMainUnresolvablePaths(t *testing.T) {
 		cmd.Writer, cmd.ErrWriter = io.Discard, io.Discard
 		if err := cmd.Run(context.Background(), []string{"gophper", "--no-cache", "php", "-r", ""}); !errors.Is(err, want) {
 			t.Errorf("php: %v, want %v", err, want)
+		}
+	}
+}
+
+// TestExtensionInstallBroken: an extension, or a file beside it, that
+// cannot be read, as from a broken copy of gophper-wasm.
+func TestExtensionInstallBroken(t *testing.T) {
+	open, openFile := extensionOpen, extensionOpenFile
+	t.Cleanup(func() { extensionOpen, extensionOpenFile = open, openFile })
+	broken := errors.New("gzip: invalid header")
+	for name, set := range map[string]func(){
+		"extension": func() { extensionOpen = func(string) ([]byte, error) { return nil, broken } },
+		"its file":  func() { extensionOpenFile = func(string, string) ([]byte, error) { return nil, broken } },
+	} {
+		extensionOpen, extensionOpenFile = open, openFile
+		set()
+		cmd := newRootCommand()
+		cmd.Writer, cmd.ErrWriter = io.Discard, io.Discard
+		// intl has its ICU data beside it.
+		if err := cmd.Run(context.Background(), []string{"gophper", "--extension-dir", t.TempDir(), "extension", "install", "intl"}); !errors.Is(err, broken) {
+			t.Errorf("%s: %v", name, err)
 		}
 	}
 }

@@ -11,6 +11,7 @@ type PHPConfig struct {
 	// PHP at its own host path, so paths mean the same on both sides.
 	Mounts []Mount
 	// TempDir is mounted at /tmp inside PHP. Empty means os.TempDir().
+	// Otherwise it must be an absolute path, as a mount's.
 	TempDir string
 	// Concurrency limits PHP instances running at once (php-fpm's
 	// pm.max_children). Zero means runtime.NumCPU().

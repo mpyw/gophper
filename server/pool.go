@@ -140,6 +140,10 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 	tempDir := cfg.TempDir
 	if tempDir == "" {
 		tempDir = os.TempDir()
+	} else if !filepath.IsAbs(tempDir) {
+		// As for a mount. On Windows, \ is not one either: it is the root
+		// of the current drive, and no PHP path maps to it.
+		return nil, fmt.Errorf("temp directory %q: not an absolute path", tempDir)
 	}
 	// PHP sees it at /tmp whatever its host path, so its real path costs
 	// nothing. wazero failed to read a nested mount, such as a project
