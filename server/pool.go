@@ -280,7 +280,10 @@ func poolCheckMounts(mounts []Mount) error {
 // request when one of the first four is set, and skips its own arguments,
 // -b too, for a query string that starts with "-": a worker would not
 // listen.
-var poolRequestVariables = []string{"SERVER_SOFTWARE", "SERVER_NAME", "GATEWAY_INTERFACE", "REQUEST_METHOD", "QUERY_STRING"}
+//
+// REDIRECT_URL makes php-cgi run PATH_TRANSLATED instead of SCRIPT_FILENAME,
+// past the script a request named.
+var poolRequestVariables = []string{"SERVER_SOFTWARE", "SERVER_NAME", "GATEWAY_INTERFACE", "REQUEST_METHOD", "QUERY_STRING", "REDIRECT_URL"}
 
 // poolStartVariables change how php-cgi starts: PHPRC and PHP_INI_SCAN_DIR
 // would load another php.ini over the pool's own, cgi.fix_pathinfo=1

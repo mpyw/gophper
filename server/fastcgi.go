@@ -101,10 +101,10 @@ func (s *FastCGIServer) handle(ctx context.Context, r *fcgi.Request) int {
 		return 0
 	}
 
-	// php-cgi runs the longest prefix of SCRIPT_FILENAME that is a file
+	// php-cgi runs the longest prefix of its script path that is a file
 	// (cgi.fix_pathinfo), so that is what is checked, as php-fpm does:
 	// uploads/evil.jpg/x.php would run evil.jpg.
-	script := fastCGIScriptFile(r.Params["SCRIPT_FILENAME"])
+	script := fastCGIScriptFile(fastCGIScriptPath(r.Params))
 	if !slices.Contains(s.cfg.LimitExtensions, filepath.Ext(script)) {
 		writePoolLog(r.Stderr, "gophper: access to the script %q has been denied (see LimitExtensions)\n", script)
 		// The request fails either way, so a failed write changes nothing.
@@ -212,6 +212,23 @@ func fastCGIGuestParams(params map[string]string, spell func(string) string) map
 		}
 	}
 	return out
+}
+
+// fastCGIScriptPath is the path php-cgi runs, as init_request_info picks
+// it with cgi.fix_pathinfo=1: SCRIPT_FILENAME, or PATH_TRANSLATED when that
+// is empty. With REDIRECT_URL set, even to nothing, a PATH_TRANSLATED that
+// differs wins: Apache's rewrites send one, and /up/evil.jpg/x would run
+// evil.jpg.
+func fastCGIScriptPath(params map[string]string) string {
+	script := params["SCRIPT_FILENAME"]
+	translated, hasTranslated := params["PATH_TRANSLATED"]
+	if script == "" {
+		script = translated
+	}
+	if _, redirected := params["REDIRECT_URL"]; redirected && hasTranslated && translated != script {
+		script = translated
+	}
+	return script
 }
 
 // fastCGIScriptFile returns the longest prefix of a script path that is a

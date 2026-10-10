@@ -8,7 +8,9 @@
  * As with php -S, $_SERVER describes the script the request resolves to,
  * not the router. The router runs in the global scope, from the directory
  * the server started in. The variables that carry all this are removed
- * first, so the router does not see them.
+ * from $_SERVER and $_ENV first. With workers, getenv() still finds them:
+ * it reads the FastCGI params, which putenv() cannot remove. They hold
+ * only paths.
  */
 // The closure cleans up and returns the router's path, so that require
 // runs in the global scope with no variable of this script left over.

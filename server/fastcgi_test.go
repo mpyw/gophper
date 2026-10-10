@@ -881,3 +881,39 @@ func TestFastCGIParamNamesWithEquals(t *testing.T) {
 		}
 	}
 }
+
+// TestFastCGIRedirectURLLimitExtensions sends REDIRECT_URL with a
+// PATH_TRANSLATED into an upload, as Apache does for a rewrite to
+// index.php/$1. php-cgi then runs PATH_TRANSLATED, walked back, not
+// SCRIPT_FILENAME: that is what is checked. A rewrite to a script still
+// runs.
+func TestFastCGIRedirectURLLimitExtensions(t *testing.T) {
+	for _, noWorkers := range []bool{false, true} {
+		addr, root := startFCGIScripts(t, map[string]string{
+			"index.php": `<?php echo "index";`,
+		}, func(cfg *server.FastCGIConfig) { cfg.NoWorkers = noWorkers })
+		if err := os.Mkdir(filepath.Join(root, "up"), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(root, "up", "evil.jpg"), []byte(`<?php echo "evil";`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		for _, tt := range []struct {
+			translated string
+			status     int
+			body       string
+		}{
+			{filepath.Join(root, "up", "evil.jpg", "x"), http.StatusForbidden, ""},
+			{filepath.Join(root, "index.php"), http.StatusOK, "index"},
+		} {
+			p := params(root, "GET", "/index.php", map[string]string{"PATH_TRANSLATED": tt.translated, "REDIRECT_URL": ""})
+			res, err := dialFCGI(t, addr).do(1, false, p, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if res.Status != tt.status || (tt.body != "" && res.Body != tt.body) || strings.Contains(res.Body, "evil") {
+				t.Errorf("NoWorkers %v, %s: %d %q", noWorkers, tt.translated, res.Status, res.Body)
+			}
+		}
+	}
+}
