@@ -223,13 +223,15 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 		processes:   !cfg.NoProcesses,
 		network:     !cfg.NoNetwork,
 		memoryLimit: cfg.MemoryLimit,
-		env:         slices.DeleteFunc(slices.Clone(cfg.Env), poolRequestVariable),
-		iniDir:      iniDir,
-		sem:         make(chan struct{}, concurrency),
-		maxWait:     cfg.MaxWaitTime,
-		errorLog:    cfg.ErrorLog,
-		accessLog:   cfg.AccessLog,
-		started:     time.Now(),
+		env: slices.DeleteFunc(slices.Clone(cfg.Env), func(kv string) bool {
+			return poolVariable(kv, poolRequestVariables) || poolVariable(kv, poolStartVariables)
+		}),
+		iniDir:    iniDir,
+		sem:       make(chan struct{}, concurrency),
+		maxWait:   cfg.MaxWaitTime,
+		errorLog:  cfg.ErrorLog,
+		accessLog: cfg.AccessLog,
+		started:   time.Now(),
 	}
 	if p.errorLog == nil {
 		p.errorLog = os.Stderr
@@ -272,14 +274,24 @@ func poolCheckMounts(mounts []Mount) error {
 	return nil
 }
 
-// poolRequestVariable reports a CGI variable of a request in "KEY=VALUE".
-// Each request sets its own, so one in Env does nothing there. php-cgi
-// takes itself for a CGI request when one of the first four is set, and
-// skips its own arguments, -b too, for a query string that starts with
-// "-": a worker would not listen.
-func poolRequestVariable(kv string) bool {
+// poolRequestVariables are a request's own CGI variables. Each request sets
+// them, so one in Env does nothing there. php-cgi takes itself for a CGI
+// request when one of the first four is set, and skips its own arguments,
+// -b too, for a query string that starts with "-": a worker would not
+// listen.
+var poolRequestVariables = []string{"SERVER_SOFTWARE", "SERVER_NAME", "GATEWAY_INTERFACE", "REQUEST_METHOD", "QUERY_STRING"}
+
+// poolStartVariables change how php-cgi starts: PHPRC and PHP_INI_SCAN_DIR
+// would load another php.ini over the pool's own, cgi.fix_pathinfo=1
+// included. PHP_FCGI_CHILDREN makes a worker fork, which WASI cannot, and a
+// bad PHP_FCGI_BACKLOG stops it from listening. php-fpm does not let a
+// pool's env[] change these either.
+var poolStartVariables = []string{"PHPRC", "PHP_INI_SCAN_DIR", "PHP_FCGI_CHILDREN", "PHP_FCGI_BACKLOG"}
+
+// poolVariable reports whether "KEY=VALUE" sets one of names.
+func poolVariable(kv string, names []string) bool {
 	k, _, _ := strings.Cut(kv, "=")
-	return slices.Contains([]string{"SERVER_SOFTWARE", "SERVER_NAME", "GATEWAY_INTERFACE", "REQUEST_METHOD", "QUERY_STRING"}, k)
+	return slices.Contains(names, k)
 }
 
 // checkStart starts php-cgi -v as each instance starts: its php.ini and
@@ -380,7 +392,11 @@ func (p *pool) run(ctx context.Context, vars map[string]string, stdin io.Reader,
 
 	env := slices.Clone(p.env)
 	for k, v := range vars {
-		env = append(env, k+"="+v)
+		// A fresh php-cgi takes the request's variables as its environment,
+		// so a web server's FastCGI params could change how it starts.
+		if !slices.Contains(poolStartVariables, k) {
+			env = append(env, k+"="+v)
+		}
 	}
 	return p.engine.RunCGI(ctx, gophper.Options{
 		Env: env, Stdin: stdin, Stdout: stdout, Stderr: stderr, FS: p.fs,

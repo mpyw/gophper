@@ -822,3 +822,30 @@ func fastCGILimitExtensionsWalkBack(t *testing.T, ini []string) {
 		}
 	}
 }
+
+// TestFastCGIParamsDoNotLoadINI sends PHP_INI_SCAN_DIR and PHPRC as FastCGI
+// params to fresh instances, which take a request's variables as their
+// environment. The pool's php.ini still holds.
+func TestFastCGIParamsDoNotLoadINI(t *testing.T) {
+	addr, root := startFCGIScripts(t, map[string]string{"ini.php": `<?php echo ini_get("cgi.fix_pathinfo");`}, func(cfg *server.FastCGIConfig) {
+		cfg.NoWorkers = true
+	})
+	// Inside the mount, where PHP could read them.
+	other := filepath.Join(root, "conf")
+	if err := os.Mkdir(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"php.ini", "zz.ini"} {
+		if err := os.WriteFile(filepath.Join(other, f), []byte("cgi.fix_pathinfo=0\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	guest := gophper.HostToGuest(other)
+	res, err := dialFCGI(t, addr).do(1, false, params(root, "GET", "/ini.php", map[string]string{"PHP_INI_SCAN_DIR": guest, "PHPRC": guest}), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.Body != "1" {
+		t.Errorf("cgi.fix_pathinfo = %q, want 1\n%s", res.Body, res.Stderr)
+	}
+}

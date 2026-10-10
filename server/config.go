@@ -23,7 +23,8 @@ type PHPConfig struct {
 	// Env holds environment variables for PHP, as KEY=VALUE. The host
 	// environment is not passed (php-fpm's clear_env). A request's own CGI
 	// variables, such as SERVER_NAME and QUERY_STRING, are dropped: each
-	// request sets them.
+	// request sets them. So are those that change how php-cgi starts:
+	// PHPRC, PHP_INI_SCAN_DIR, PHP_FCGI_CHILDREN and PHP_FCGI_BACKLOG.
 	Env []string
 	// ErrorLog receives PHP's stderr and gophper's own errors. Nil means os.Stderr.
 	ErrorLog io.Writer

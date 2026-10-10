@@ -693,22 +693,40 @@ func TestHTTPFlushFails(t *testing.T) {
 	}
 }
 
-// TestHTTPEnvWithCGIVariables starts with CGI variables in Env. php-cgi
-// took the start-up check for a request, and a QUERY_STRING of -s kept a
-// worker from listening. They are dropped: each request sets its own.
+// TestHTTPEnvWithCGIVariables starts with variables in Env that php-cgi
+// reads itself. A request's CGI variables made it take the start-up check
+// for a request, and a QUERY_STRING of -s kept a worker from listening.
+// PHPRC and PHP_INI_SCAN_DIR loaded another php.ini over the pool's, and
+// PHP_FCGI_CHILDREN and PHP_FCGI_BACKLOG broke every worker. All are
+// dropped, and the rest of Env still reaches PHP.
 func TestHTTPEnvWithCGIVariables(t *testing.T) {
 	root := t.TempDir()
-	if err := os.WriteFile(filepath.Join(root, "index.php"), []byte(`<?php echo getenv("SERVER_NAME") ?: "none", " ", getenv("APP") ?: "none";`), 0o600); err != nil {
+	if err := os.WriteFile(filepath.Join(root, "index.php"), []byte(`<?php echo ini_get("cgi.fix_pathinfo"), " ", ini_get("memory_limit"), " ", getenv("APP") ?: "none";`), 0o600); err != nil {
 		t.Fatal(err)
+	}
+	// Inside the mount, where PHP could read them.
+	other := filepath.Join(root, "conf")
+	if err := os.Mkdir(other, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"php.ini", "zz.ini"} {
+		if err := os.WriteFile(filepath.Join(other, f), []byte("cgi.fix_pathinfo=0\nmemory_limit=7M\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 	for _, noWorkers := range []bool{false, true} {
 		srv := startHTTPWith(t, func(cfg *server.HTTPConfig) {
 			cfg.Root = root
 			cfg.NoWorkers = noWorkers
-			cfg.Env = []string{"SERVER_NAME=configured", "GATEWAY_INTERFACE=CGI/1.1", "REQUEST_METHOD=GET", "QUERY_STRING=-s", "APP=yes"}
+			cfg.Env = []string{
+				"SERVER_NAME=configured", "GATEWAY_INTERFACE=CGI/1.1", "REQUEST_METHOD=GET", "QUERY_STRING=-s",
+				"PHPRC=" + gophper.HostToGuest(other), "PHP_INI_SCAN_DIR=" + gophper.HostToGuest(other),
+				"PHP_FCGI_CHILDREN=2", "PHP_FCGI_BACKLOG=100000",
+				"APP=yes",
+			}
 		})
-		if res, body := get(t, srv.URL+"/"); res.StatusCode != 200 || !strings.HasSuffix(body, " yes") {
-			t.Errorf("NoWorkers %v: %d %q", noWorkers, res.StatusCode, body)
+		if res, body := get(t, srv.URL+"/"); res.StatusCode != 200 || body != "1 128M yes" {
+			t.Errorf("NoWorkers %v: %d %q, want the pool's php.ini and APP", noWorkers, res.StatusCode, body)
 		}
 	}
 }

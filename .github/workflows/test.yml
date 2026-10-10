@@ -43,9 +43,10 @@ jobs:
       - uses: actions/cache@v6
         with:
           # bin holds PHP_BINARY's scripts and php.exe copies, made anew
-          # for each run's own gophper.
+          # for each run's own gophper. An exclusion removes only what the
+          # globs list, so the directory's children are listed, not itself.
           path: |
-            ${{ runner.temp }}/gophper-test-cache
+            ${{ runner.temp }}/gophper-test-cache/*
             !${{ runner.temp }}/gophper-test-cache/bin
             ~/.cache/gophper
             ~/Library/Caches/gophper
