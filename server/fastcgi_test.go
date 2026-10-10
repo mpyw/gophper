@@ -917,3 +917,49 @@ func TestFastCGIRedirectURLLimitExtensions(t *testing.T) {
 		}
 	}
 }
+
+// TestFastCGIScriptPathEdges refuses a script path that php-cgi would run
+// otherwise than checked: one with no file yet, where an upload could
+// appear before php-cgi looks; one with a NUL, which php-cgi cuts there;
+// and an empty SCRIPT_FILENAME, which php-cgi keeps and dies on. A missing
+// SCRIPT_FILENAME falls back to PATH_TRANSLATED, as in php-cgi.
+func TestFastCGIScriptPathEdges(t *testing.T) {
+	addr, root := startFCGIScripts(t, map[string]string{"index.php": `<?php echo "index";`}, func(*server.FastCGIConfig) {})
+	if err := os.Mkdir(filepath.Join(root, "up"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "up", "evil.jpg"), []byte(`<?php echo "evil";`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	index := filepath.Join(root, "index.php")
+	for _, tt := range []struct {
+		name   string
+		set    map[string]string
+		unset  string
+		status int
+		body   string
+	}{
+		{"no file yet", map[string]string{"SCRIPT_FILENAME": filepath.Join(root, "up", "new.jpg", "x.php")}, "", http.StatusNotFound, ""},
+		{"NUL in SCRIPT_FILENAME", map[string]string{"SCRIPT_FILENAME": filepath.Join(root, "up", "evil.jpg") + "\x00.php"}, "", http.StatusBadRequest, ""},
+		{"NUL in PATH_TRANSLATED", map[string]string{"PATH_TRANSLATED": filepath.Join(root, "up", "evil.jpg") + "\x00.php", "REDIRECT_URL": ""}, "", http.StatusBadRequest, ""},
+		{"empty SCRIPT_FILENAME", map[string]string{"SCRIPT_FILENAME": "", "PATH_TRANSLATED": index}, "", http.StatusNotFound, ""},
+		{"no SCRIPT_FILENAME", map[string]string{"PATH_TRANSLATED": index}, "SCRIPT_FILENAME", http.StatusOK, "index"},
+		{"no SCRIPT_FILENAME, an upload", map[string]string{"PATH_TRANSLATED": filepath.Join(root, "up", "evil.jpg")}, "SCRIPT_FILENAME", http.StatusForbidden, ""},
+	} {
+		p := params(root, "GET", "/index.php", tt.set)
+		if tt.unset != "" {
+			delete(p, tt.unset)
+		}
+		res, err := dialFCGI(t, addr).do(1, false, p, nil)
+		if err != nil {
+			t.Fatalf("%s: %v", tt.name, err)
+		}
+		if res.Status != tt.status || (tt.body != "" && res.Body != tt.body) || strings.Contains(res.Body, "evil") {
+			t.Errorf("%s: %d %q\n%s", tt.name, res.Status, res.Body, res.Stderr)
+		}
+	}
+	// The worker took none of them hard.
+	if res, err := dialFCGI(t, addr).do(1, false, params(root, "GET", "/index.php", nil), nil); err != nil || res.Body != "index" {
+		t.Errorf("after: %v %+v", err, res)
+	}
+}

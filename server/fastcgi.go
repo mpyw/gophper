@@ -101,10 +101,25 @@ func (s *FastCGIServer) handle(ctx context.Context, r *fcgi.Request) int {
 		return 0
 	}
 
+	// php-cgi reads params as C strings: evil.jpg\x00.php is evil.jpg to
+	// it, and a file Go cannot find, ending in .php, here.
+	for k, v := range r.Params {
+		if strings.ContainsRune(v, 0) {
+			writePoolLog(r.Stderr, "gophper: the param %s holds a NUL byte\n", k)
+			_, _ = fmt.Fprint(out, "Status: 400 Bad Request\r\nContent-Type: text/plain\r\n\r\nBad Request\n")
+			return 1
+		}
+	}
 	// php-cgi runs the longest prefix of its script path that is a file
 	// (cgi.fix_pathinfo), so that is what is checked, as php-fpm does:
-	// uploads/evil.jpg/x.php would run evil.jpg.
-	script := fastCGIScriptFile(fastCGIScriptPath(r.Params))
+	// uploads/evil.jpg/x.php would run evil.jpg. With none yet, php-cgi
+	// answers 404 too. A file made after the check would run unchecked.
+	script, ok := fastCGIScriptFile(fastCGIScriptPath(r.Params))
+	if !ok {
+		writePoolLog(r.Stderr, "gophper: no script file for %q\n", r.Params["SCRIPT_FILENAME"])
+		_, _ = fmt.Fprint(out, "Status: 404 Not Found\r\nContent-Type: text/plain\r\n\r\nFile not found.\n")
+		return 1
+	}
 	if !slices.Contains(s.cfg.LimitExtensions, filepath.Ext(script)) {
 		writePoolLog(r.Stderr, "gophper: access to the script %q has been denied (see LimitExtensions)\n", script)
 		// The request fails either way, so a failed write changes nothing.
@@ -216,13 +231,15 @@ func fastCGIGuestParams(params map[string]string, spell func(string) string) map
 
 // fastCGIScriptPath is the path php-cgi runs, as init_request_info picks
 // it with cgi.fix_pathinfo=1: SCRIPT_FILENAME, or PATH_TRANSLATED when that
-// is empty. With REDIRECT_URL set, even to nothing, a PATH_TRANSLATED that
+// is missing. With REDIRECT_URL set, even to nothing, a PATH_TRANSLATED that
 // differs wins: Apache's rewrites send one, and /up/evil.jpg/x would run
 // evil.jpg.
 func fastCGIScriptPath(params map[string]string) string {
-	script := params["SCRIPT_FILENAME"]
+	// php-cgi falls back only for a SCRIPT_FILENAME that is missing. An
+	// empty one stays, and runs nothing.
+	script, hasScript := params["SCRIPT_FILENAME"]
 	translated, hasTranslated := params["PATH_TRANSLATED"]
-	if script == "" {
+	if !hasScript {
 		script = translated
 	}
 	if _, redirected := params["REDIRECT_URL"]; redirected && hasTranslated && translated != script {
@@ -232,16 +249,19 @@ func fastCGIScriptPath(params map[string]string) string {
 }
 
 // fastCGIScriptFile returns the longest prefix of a script path that is a
-// regular file, as php-cgi walks it back, or the path itself if none is.
-func fastCGIScriptFile(script string) string {
+// regular file, as php-cgi walks it back, and false if none is.
+func fastCGIScriptFile(script string) (string, bool) {
+	if script == "" {
+		return "", false
+	}
 	p := filepath.Clean(filepath.FromSlash(script))
 	for {
 		if fi, err := os.Stat(p); err == nil && fi.Mode().IsRegular() {
-			return p
+			return p, true
 		}
 		parent := filepath.Dir(p)
 		if parent == p {
-			return script
+			return "", false
 		}
 		p = parent
 	}
