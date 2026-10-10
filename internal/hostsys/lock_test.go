@@ -6,6 +6,7 @@ package hostsys
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -184,4 +185,11 @@ func TestSystemLock(t *testing.T) {
 			t.Errorf("kept %d files", len(s.locks))
 		}
 	})
+}
+
+// TestSystemLockFileNil fails for no file, rather than panicking.
+func TestSystemLockFileNil(t *testing.T) {
+	if err := systemLockFile(nil, systemLockShared); !errors.Is(err, os.ErrInvalid) {
+		t.Errorf("err = %v", err)
+	}
 }

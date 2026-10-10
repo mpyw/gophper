@@ -146,18 +146,61 @@ func TestDNSExchangeTCPWriteFails(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	dial := dnsDialTCP
-	t.Cleanup(func() { dnsDialTCP = dial })
-	dnsDialTCP = func(ctx context.Context, d *net.Dialer, address string) (net.Conn, error) {
-		c, err := dial(ctx, d, address)
-		if err != nil {
-			return nil, err
+	dial := dnsDial
+	t.Cleanup(func() { dnsDial = dial })
+	dnsDial = func(ctx context.Context, d *net.Dialer, network, address string) (net.Conn, error) {
+		c, err := dial(ctx, d, network, address)
+		if err != nil || network != "tcp" {
+			return c, err
 		}
 		return dnsResetConn{c}, nil
 	}
 	server := dnsTestServer(t, func(q []byte) [][]byte { return [][]byte{dnsTestAnswer(q, id, 0x02)} }, func([]byte) []byte { return nil })
 	if a, err := dnsExchange(context.Background(), server, q, id); !errors.Is(err, errDNSReset) {
 		t.Errorf("% x, %v", a, err)
+	}
+}
+
+// TestDNSExchangeCanceledAsDialed: a ctx canceled just as a conn is made,
+// over UDP or over TCP, still ends the exchange at once. Set after the
+// cancel's deadline, the timeout would undo it, and the write would wait
+// all dnsTimeout. The conn is a pipe nothing reads, so only a deadline
+// ends the write. The window is narrow, so it takes many tries to show.
+func TestDNSExchangeCanceledAsDialed(t *testing.T) {
+	q, id, err := dnsBuildQuery("example.com", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dial := dnsDial
+	t.Cleanup(func() { dnsDial = dial })
+	server := dnsTestServer(t, func(q []byte) [][]byte { return [][]byte{dnsTestAnswer(q, id, 0x02)} }, func([]byte) []byte {
+		t.Error("asked over TCP")
+		return nil
+	})
+	for _, network := range []string{"udp", "tcp"} {
+		var cancel context.CancelFunc
+		dnsDial = func(ctx context.Context, d *net.Dialer, n, address string) (net.Conn, error) {
+			if n != network {
+				return dial(ctx, d, n, address)
+			}
+			c, peer := net.Pipe()
+			t.Cleanup(func() { _ = peer.Close() }) // never read
+			cancel()
+			return c, nil
+		}
+		for range 2000 {
+			var ctx context.Context
+			ctx, cancel = context.WithCancel(context.Background())
+			start := time.Now()
+			_, err := dnsExchange(ctx, server, q, id)
+			cancel()
+			if err == nil {
+				t.Fatalf("%s: canceled, yet answered", network)
+			}
+			if d := time.Since(start); d > time.Second {
+				t.Fatalf("%s: waited %s after the cancel", network, d)
+			}
+		}
 	}
 }
 

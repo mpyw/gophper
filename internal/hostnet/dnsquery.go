@@ -77,9 +77,8 @@ func (x dnsExports) query(ctx context.Context, m api.Module, namePtr, nameLen ui
 // dnsBuildQuery returns a query packet with recursion desired, and its id.
 func dnsBuildQuery(name string, class, typ uint16) ([]byte, uint16, error) {
 	var idb [2]byte
-	if _, err := rand.Read(idb[:]); err != nil {
-		return nil, 0, err
-	}
+	// It never fails: crypto/rand crashes the program instead (Go 1.24).
+	_, _ = rand.Read(idb[:])
 	id := binary.BigEndian.Uint16(idb[:])
 	p := binary.BigEndian.AppendUint16(nil, id)
 	p = append(p, 0x01, 0x00) // RD
@@ -103,28 +102,29 @@ func dnsBuildQuery(name string, class, typ uint16) ([]byte, uint16, error) {
 	return p, id, nil
 }
 
-// dnsDialTCP is a var so that a test can give dnsExchange a connection
-// that the server reset as it was made, which no test server can time.
-var dnsDialTCP = func(ctx context.Context, d *net.Dialer, address string) (net.Conn, error) {
-	return d.DialContext(ctx, "tcp", address)
+// dnsDial is a var so that a test can give dnsExchange a connection that
+// the server reset as it was made, or one dialed as ctx was canceled. No
+// test server can time either.
+var dnsDial = func(ctx context.Context, d *net.Dialer, network, address string) (net.Conn, error) {
+	return d.DialContext(ctx, network, address)
 }
 
 // dnsExchange asks one server over UDP, and again over TCP when the answer
 // was cut short.
 func dnsExchange(ctx context.Context, server string, q []byte, id uint16) ([]byte, error) {
 	d := net.Dialer{Timeout: dnsTimeout}
-	conn, err := d.DialContext(ctx, "udp", server)
+	conn, err := dnsDial(ctx, &d, "udp", server)
 	if err != nil {
 		return nil, err
 	}
 	// Only the answer matters, and a close error cannot change it.
 	defer func() { _ = conn.Close() }()
+	// It fails only on a closed conn, and this one was just dialed. The
+	// timeout goes first: set after the cancel's, it would undo it.
+	_ = conn.SetDeadline(time.Now().Add(dnsTimeout))
 	// If this fails, the conn is closed already, which wakes the read too.
 	stop := context.AfterFunc(ctx, func() { _ = conn.SetDeadline(time.Now()) })
 	defer stop()
-	if err := conn.SetDeadline(time.Now().Add(dnsTimeout)); err != nil {
-		return nil, err
-	}
 	if _, err := conn.Write(q); err != nil {
 		return nil, err
 	}
@@ -143,16 +143,14 @@ func dnsExchange(ctx context.Context, server string, q []byte, id uint16) ([]byt
 	}
 
 	// Truncated: TCP, with a two-byte length before each message.
-	tc, err := dnsDialTCP(ctx, &d, server)
+	tc, err := dnsDial(ctx, &d, "tcp", server)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = tc.Close() }()
+	_ = tc.SetDeadline(time.Now().Add(dnsTimeout)) // as for conn above
 	stopTCP := context.AfterFunc(ctx, func() { _ = tc.SetDeadline(time.Now()) })
 	defer stopTCP()
-	if err := tc.SetDeadline(time.Now().Add(dnsTimeout)); err != nil {
-		return nil, err
-	}
 	if _, err := tc.Write(append(binary.BigEndian.AppendUint16(nil, uint16(len(q))), q...)); err != nil {
 		return nil, err
 	}
