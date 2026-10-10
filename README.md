@@ -93,6 +93,10 @@ PHP gets nothing of the host unless `Options` says so:
 | `MemoryLimit` | Caps PHP's memory in bytes, its own code and data included. `memory_limit` cannot lift it. | WebAssembly's 4 GiB |
 | `Signals` | Signals for PHP, as from `signal.Notify`. Handled ones run the `pcntl` handler. The rest end the run with exit code 128 plus the signal number. | No signals |
 
+> [!NOTE]
+> Only the deadline and the cancellation of a `ctx` reach PHP.
+> Its values are not passed on to wazero, so its experimental settings cannot get around these fields.
+
 `DefaultEngineConfig` keeps a per-user cache directory: wazero's compiled code, and the PHP binaries decompressed.
 With the cache, `gophper php -r 'echo 1;'` takes about 0.18 seconds.
 Most of it is wazero validating the 16 MB binary, which it does even with the cache.
@@ -112,9 +116,24 @@ Most of it is wazero validating the 16 MB binary, which it does even with the ca
 
 ## Usage: As a Tool
 
-```sh
-CGO_ENABLED=0 go install github.com/mpyw/gophper/cmd/gophper@latest
+### Install
+
+| Way | How |
+| --- | --- |
+| A release binary | Download the archive for your OS and CPU from [Releases](https://github.com/mpyw/gophper/releases). Put `gophper` on your `PATH`. `checksums.txt` has their SHA-256. |
+| [mise](https://mise.jdx.dev/) | `mise use -g github:mpyw/gophper` |
+| From source | `CGO_ENABLED=0 go install github.com/mpyw/gophper/cmd/gophper@latest` |
+
+Releases cover macOS, Linux and Windows, each on amd64 and arm64.
+
+`gophper --version` names what is inside too. Put it in a bug report:
+
+```console
+$ gophper --version
+gophper version v0.1.0 (PHP 8.6.0RC3, gophper-wasm v0.2.3, wazero v1.12.0, go1.27.1 darwin/arm64)
 ```
+
+### Commands
 
 | Command | What it does |
 | --- | --- |
@@ -247,7 +266,7 @@ location ~ \.php(/|$) {
 | Option | Meaning | php-fpm equivalent |
 | --- | --- | --- |
 | `--mount DIR[:ro]` | A directory PHP may access, at the same path. Repeatable. Default: the current directory | |
-| `--temp-dir DIR` | Mounted at `/tmp` inside PHP. Default: the system's | |
+| `--temp-dir DIR` | Mounted at `/tmp` inside PHP. Default: the system's. In Go, `TempDir` must be an absolute path. | |
 | `--no-processes` | Stops PHP from starting host programs (`proc_open`, `exec` and the rest) | `disable_functions` |
 | `--no-network` | Stops PHP from using TCP, UDP and DNS. Unix sockets inside the mounts still work. | |
 | `--memory-max SIZE` | Caps each PHP instance's memory, such as `512M`. `memory_limit` cannot lift it. A worker's opcache takes 64 MB of it, so a worker needs about 96M. serve and fcgi refuse a cap PHP cannot start under. Default: none | |

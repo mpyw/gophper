@@ -22,12 +22,14 @@ import (
 	"os/signal"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"strings"
 	"syscall"
 	"time"
 
+	phpwasm "github.com/mpyw/gophper-wasm"
 	phpext "github.com/mpyw/gophper-wasm/ext"
 	"github.com/urfave/cli/v3"
 	"golang.org/x/crypto/acme/autocert"
@@ -74,10 +76,56 @@ func logf(w io.Writer, format string, args ...any) {
 	_, _ = fmt.Fprintf(w, format, args...)
 }
 
+// version is the release, set by goreleaser with -ldflags "-X
+// main.version=...".
+var version string
+
+// mainVersion is the release, or the module version go install built. A
+// bug report needs what is inside too: the PHP release, the gophper-wasm
+// build of it, wazero, and Go with the platform.
+func mainVersion() string {
+	v := version
+	info, ok := debug.ReadBuildInfo()
+	if v == "" {
+		v = "(devel)"
+		if ok && info.Main.Version != "" {
+			v = info.Main.Version
+		}
+	} else if !strings.HasPrefix(v, "v") {
+		v = "v" + v
+	}
+	inside := []string{"PHP " + phpwasm.PHPVersion}
+	for _, path := range []string{"github.com/mpyw/gophper-wasm", "github.com/tetratelabs/wazero"} {
+		inside = append(inside, mainModuleVersion(info, ok, path))
+	}
+	inside = append(inside, runtime.Version()+" "+runtime.GOOS+"/"+runtime.GOARCH)
+	return v + " (" + strings.Join(inside, ", ") + ")"
+}
+
+// mainModuleVersion names a dependency with its version, as linked in.
+func mainModuleVersion(info *debug.BuildInfo, ok bool, path string) string {
+	name := path[strings.LastIndexByte(path, '/')+1:]
+	if ok {
+		for _, m := range info.Deps {
+			if m.Path != path {
+				continue
+			}
+			if m.Replace != nil {
+				m = m.Replace
+			}
+			if m.Version != "" {
+				return name + " " + m.Version
+			}
+		}
+	}
+	return name + " (devel)"
+}
+
 func newRootCommand() *cli.Command {
 	return &cli.Command{
-		Name:  "gophper",
-		Usage: "run PHP on WebAssembly, with no cgo",
+		Name:    "gophper",
+		Usage:   "run PHP on WebAssembly, with no cgo",
+		Version: mainVersion(),
 		// main prints errors and exits; urfave/cli must not do it as well.
 		ExitErrHandler: func(context.Context, *cli.Command, error) {},
 		Flags: []cli.Flag{

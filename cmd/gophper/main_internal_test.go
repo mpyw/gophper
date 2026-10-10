@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"runtime/debug"
 	"slices"
 	"strings"
 	"syscall"
@@ -345,5 +346,38 @@ func TestLicensesUnreadable(t *testing.T) {
 		if err := cmd.Run(context.Background(), []string{"gophper", "licenses"}); !errors.Is(err, fs.ErrPermission) {
 			t.Errorf("listing works %v: %v", list, err)
 		}
+	}
+}
+
+// TestMainVersion: goreleaser's version, with or without its v, or the
+// module version, and what is inside in every case.
+func TestMainVersion(t *testing.T) {
+	saved := version
+	t.Cleanup(func() { version = saved })
+	for _, tt := range []struct{ set, want string }{
+		{"0.1.0", "v0.1.0 (PHP "},
+		{"v0.1.0", "v0.1.0 (PHP "},
+		{"", "(PHP "},
+	} {
+		version = tt.set
+		got := mainVersion()
+		if !strings.Contains(got, tt.want) || !strings.Contains(got, ", gophper-wasm v") || !strings.Contains(got, ", wazero v") || !strings.HasSuffix(got, " "+runtime.GOOS+"/"+runtime.GOARCH+")") {
+			t.Errorf("%q: %q", tt.set, got)
+		}
+	}
+	// Without the build info, or the module in it.
+	if got := mainModuleVersion(nil, false, "example.com/x"); got != "x (devel)" {
+		t.Errorf("no build info: %q", got)
+	}
+	info := &debug.BuildInfo{Deps: []*debug.Module{
+		{Path: "example.com/other", Version: "v1.0.0"},
+		{Path: "example.com/x", Version: "v1.0.0", Replace: &debug.Module{Path: "../x"}},
+	}}
+	if got := mainModuleVersion(info, true, "example.com/x"); got != "x (devel)" {
+		t.Errorf("replaced by a directory: %q", got)
+	}
+	info.Deps[1].Replace.Version = "v1.0.1"
+	if got := mainModuleVersion(info, true, "example.com/x"); got != "x v1.0.1" {
+		t.Errorf("replaced by a version: %q", got)
 	}
 }
