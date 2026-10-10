@@ -10,6 +10,10 @@ import (
 	"syscall"
 )
 
+// socketFileConn is a var so that a test can fail the second end. Closing
+// the first end frees the fd that the second dup would lack.
+var socketFileConn = net.FileConn
+
 // socketPair returns the two ends of a host socketpair(2), so that either
 // can be given to a child process.
 func socketPair() (net.Conn, net.Conn, error) {
@@ -36,5 +40,5 @@ func socketPairConn(fd int) (net.Conn, error) {
 	f := os.NewFile(uintptr(fd), "socketpair")
 	// FileConn duplicates the fd, so this closes only the original.
 	defer func() { _ = f.Close() }()
-	return net.FileConn(f)
+	return socketFileConn(f)
 }

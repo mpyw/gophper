@@ -124,6 +124,10 @@ var poolOpcacheInstanceINI = []string{
 // poolBootstrapDir is where php.ini and the extra files are mounted.
 const poolBootstrapDir = "/etc/gophper"
 
+// poolMkdirTemp is a var so that a test can fail the second directory,
+// which only a full disk would.
+var poolMkdirTemp = os.MkdirTemp
+
 // newPool prepares a pool. files are mounted read-only beside php.ini, for
 // scripts the server runs itself. See bootstrapPath.
 //
@@ -179,7 +183,7 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 	// php-cgi reads /etc/gophper/php.ini by default (--with-config-file-path),
 	// so no PHPRC is needed. It is not passed through -d either: php-cgi
 	// skips its arguments when QUERY_STRING starts with "-".
-	iniDir, err := os.MkdirTemp("", "gophper-")
+	iniDir, err := poolMkdirTemp("", "gophper-")
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +246,7 @@ func newPool(engine *gophper.Engine, cfg PHPConfig, files map[string]string) (*p
 	}
 	if !cfg.NoWorkers {
 		// Only this user may reach the workers' sockets.
-		dir, err := os.MkdirTemp("", "gophper-w")
+		dir, err := poolMkdirTemp("", "gophper-w")
 		if err != nil {
 			_ = os.RemoveAll(iniDir) // the MkdirTemp error is the one to report
 			return nil, err

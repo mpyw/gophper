@@ -57,7 +57,7 @@ func TestDNSSystemServersFails(t *testing.T) {
 	get := dnsGetAdaptersAddresses
 	t.Cleanup(func() { dnsGetAdaptersAddresses = get })
 	for name, fake := range map[string]func(size *uint32) error{
-		"failed": func(*uint32) error { return windows.ERROR_NO_DATA },
+		"failed":    func(*uint32) error { return windows.ERROR_NO_DATA },
 		"same size": func(*uint32) error { return windows.ERROR_BUFFER_OVERFLOW },
 	} {
 		calls := 0

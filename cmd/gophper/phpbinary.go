@@ -32,7 +32,7 @@ const phpBinaryArgsFile = "gophper.args"
 // Windows passes a batch file's arguments through cmd.exe, which reads &
 // and | in them.
 func phpBinaryScript(cacheDir string, args []string) (string, error) {
-	exe, err := os.Executable()
+	exe, err := phpBinaryExecutable()
 	if err != nil {
 		return "", err
 	}
@@ -61,6 +61,10 @@ func phpBinaryScript(cacheDir string, args []string) (string, error) {
 		return err
 	})
 }
+
+// phpBinaryExecutable is a var so that a test can lose gophper's path, as
+// an upgrade that removes the running binary does.
+var phpBinaryExecutable = os.Executable
 
 // phpBinaryBase is the cache directory, or phpBinaryTempBase without one.
 func phpBinaryBase(cacheDir string) (string, error) {
@@ -199,7 +203,7 @@ func phpBinaryArgs() []string {
 	if runtime.GOOS != "windows" {
 		return nil
 	}
-	exe, err := os.Executable()
+	exe, err := phpBinaryExecutable()
 	if err != nil {
 		return nil
 	}

@@ -117,7 +117,13 @@ func TestDNSBuildQuery(t *testing.T) {
 	if got, want := string(q[12:]), "\x03www\x07example\x03com\x00\x00\x0f\x00\x01"; got != want {
 		t.Errorf("question %q, want %q", got, want)
 	}
-	for _, name := range []string{"a..b", strings.Repeat("x", 64) + ".com", ""} {
+	// 4 labels of 63 bytes: 4*64+1 = 257 bytes on the wire.
+	long := strings.Repeat(strings.Repeat("x", 63)+".", 4)
+	// 255 bytes on the wire: 3 labels of 63 and one of 61.
+	if _, _, err := dnsBuildQuery(long[:64*3]+strings.Repeat("x", 61), 1, 1); err != nil {
+		t.Errorf("a 255-byte name: %v", err)
+	}
+	for _, name := range []string{"a..b", strings.Repeat("x", 64) + ".com", "", long} {
 		if _, _, err := dnsBuildQuery(name, 1, 1); err == nil {
 			t.Errorf("dnsBuildQuery(%q) succeeded", name)
 		}

@@ -21,6 +21,7 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"slices"
 	"strconv"
 	"strings"
@@ -580,18 +581,32 @@ func serveAction(ctx context.Context, cmd *cli.Command) (err error) {
 	if err != nil {
 		return err
 	}
+	return serveRun(ctx, cfg.Root, servers)
+}
 
+// serveListen is a var so that a test can give serveRun a listener that
+// fails.
+var serveListen = net.Listen
+
+// serveRun serves root with each of servers until one fails or ctx is
+// done, and then shuts them all down.
+func serveRun(ctx context.Context, root string, servers []*http.Server) error {
 	errs := make(chan error, len(servers))
-	for _, s := range servers {
-		l, err := net.Listen("tcp", s.Addr)
+	for i, s := range servers {
+		l, err := serveListen("tcp", s.Addr)
 		if err != nil {
+			// The ones serving already stop too. Their Close errors would
+			// only hide why.
+			for _, started := range servers[:i] {
+				_ = started.Close()
+			}
 			return err
 		}
 		scheme := "http"
 		if s.TLSConfig != nil {
 			scheme = "https"
 		}
-		logf(os.Stderr, "gophper: serving %s on %s://%s\n", cfg.Root, scheme, l.Addr())
+		logf(os.Stderr, "gophper: serving %s on %s://%s\n", root, scheme, l.Addr())
 		go func() {
 			if s.TLSConfig != nil {
 				errs <- s.ServeTLS(l, "", "")
@@ -601,10 +616,11 @@ func serveAction(ctx context.Context, cmd *cli.Command) (err error) {
 		}()
 	}
 
+	var err error
 	select {
-	case err := <-errs:
-		if !errors.Is(err, http.ErrServerClosed) {
-			return err
+	case err = <-errs:
+		if errors.Is(err, http.ErrServerClosed) {
+			err = nil
 		}
 	case <-ctx.Done():
 	}
@@ -667,6 +683,13 @@ func fcgiAction(ctx context.Context, cmd *cli.Command) (err error) {
 	if err != nil {
 		return fmt.Errorf("--listen-mode: %w", err)
 	}
+	listen := cmd.String("listen")
+	// Linux takes unix:@name for an abstract socket. It has no file, so no
+	// --listen-mode: any process could connect. And the stale-socket
+	// Remove below would delete a file of that name here.
+	if strings.HasPrefix(listen, "unix:@") && (runtime.GOOS == "linux" || runtime.GOOS == "android") {
+		return fmt.Errorf("--listen %s: an abstract socket has no permissions; use a path", listen)
+	}
 
 	engine, err := newEngine(ctx, cmd)
 	if err != nil {
@@ -679,7 +702,6 @@ func fcgiAction(ctx context.Context, cmd *cli.Command) (err error) {
 	}
 	defer func() { err = errors.Join(err, srv.Close()) }()
 
-	listen := cmd.String("listen")
 	network, address := "tcp", listen
 	if path, ok := strings.CutPrefix(listen, "unix:"); ok {
 		network, address = "unix", path

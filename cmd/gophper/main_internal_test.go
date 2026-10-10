@@ -14,6 +14,7 @@ import (
 	"io"
 	"io/fs"
 	"math/big"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -102,6 +103,61 @@ func TestServeServers(t *testing.T) {
 	}
 	if _, err := serveServers(h, "", nil, cert+".missing", key); err == nil {
 		t.Error("a missing certificate was accepted")
+	}
+}
+
+// serveFailingListener fails its first Accept, as a listener that broke.
+type serveFailingListener struct{ net.Listener }
+
+func (serveFailingListener) Accept() (net.Conn, error) { return nil, errServeBroken }
+
+var errServeBroken = errors.New("broken listener")
+
+// TestServeRunFails ends serve when a server fails, and stops the others.
+// A server that cannot listen stops the ones serving already.
+func TestServeRunFails(t *testing.T) {
+	listen := serveListen
+	t.Cleanup(func() { serveListen = listen })
+	var first net.Listener
+	serveListen = func(network, address string) (net.Listener, error) {
+		l, err := listen(network, address)
+		if err != nil || first != nil {
+			return l, err
+		}
+		first = l
+		return serveFailingListener{l}, nil
+	}
+	h := http.NotFoundHandler()
+	servers := []*http.Server{{Addr: "127.0.0.1:0", Handler: h}, {Addr: "127.0.0.1:0", Handler: h}}
+	if err := serveRun(context.Background(), "root", servers); !errors.Is(err, errServeBroken) {
+		t.Errorf("a failing server: %v", err)
+	}
+
+	var started net.Listener
+	serveListen = func(network, address string) (net.Listener, error) {
+		if started != nil {
+			return nil, errServeBroken
+		}
+		l, err := listen(network, address)
+		started = l
+		return l, err
+	}
+	servers = []*http.Server{{Addr: "127.0.0.1:0", Handler: h}, {Addr: "127.0.0.1:0", Handler: h}}
+	if err := serveRun(context.Background(), "root", servers); !errors.Is(err, errServeBroken) {
+		t.Errorf("a server that cannot listen: %v", err)
+	}
+	// The first one was closed, and its listener with it.
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		c, err := net.Dial("tcp", started.Addr().String())
+		if err != nil {
+			break
+		}
+		_ = c.Close() // only probing
+		if time.Now().After(deadline) {
+			t.Fatal("the first server still listens")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

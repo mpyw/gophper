@@ -10,16 +10,24 @@ import (
 	"time"
 )
 
+// socketPairListen, socketPairDial and socketPairWait are vars so that a
+// test can fail each step, as running out of ports would.
+var (
+	socketPairListen = net.ListenTCP
+	socketPairDial   = net.Dial
+	socketPairWait   = 10 * time.Second
+)
+
 // socketPair connects two loopback TCP sockets, as Windows has no
 // socketpair(2). A stream pair behaves the same for PHP.
 func socketPair() (net.Conn, net.Conn, error) {
-	l, err := net.ListenTCP("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	l, err := socketPairListen("tcp", &net.TCPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		return nil, nil, err
 	}
 	// Only the one connection below is accepted.
 	defer func() { _ = l.Close() }()
-	a, err := net.Dial("tcp", l.Addr().String())
+	a, err := socketPairDial("tcp", l.Addr().String())
 	if err != nil {
 		return nil, nil, err
 	}
@@ -33,7 +41,7 @@ func socketPair() (net.Conn, net.Conn, error) {
 // socketPairAccept accepts the connection from peer. Any local process can
 // connect to the listener first, so the others are closed.
 func socketPairAccept(l *net.TCPListener, peer string) (net.Conn, error) {
-	if err := l.SetDeadline(time.Now().Add(10 * time.Second)); err != nil {
+	if err := l.SetDeadline(time.Now().Add(socketPairWait)); err != nil {
 		return nil, err
 	}
 	for {

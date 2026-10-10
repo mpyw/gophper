@@ -8,7 +8,9 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"testing"
+	"time"
 )
 
 // TestSocketPairAcceptSkipsStrangers takes only the dialer's connection.
@@ -77,5 +79,39 @@ func TestSocketPairAcceptFails(t *testing.T) {
 	}()
 	if _, err := socketPairAccept(l, "127.0.0.1:1"); !errors.Is(err, net.ErrClosed) {
 		t.Errorf("closed while waiting: %v", err)
+	}
+}
+
+// TestSocketPairFails fails at each step, and leaves the dialed end
+// closed when the accept fails.
+func TestSocketPairFails(t *testing.T) {
+	listen, dial, wait := socketPairListen, socketPairDial, socketPairWait
+	t.Cleanup(func() { socketPairListen, socketPairDial, socketPairWait = listen, dial, wait })
+	noPorts := errors.New("no ports")
+	socketPairListen = func(string, *net.TCPAddr) (*net.TCPListener, error) { return nil, noPorts }
+	if _, _, err := socketPair(); !errors.Is(err, noPorts) {
+		t.Errorf("listen: %v", err)
+	}
+	socketPairListen = listen
+	socketPairDial = func(string, string) (net.Conn, error) { return nil, noPorts }
+	if _, _, err := socketPair(); !errors.Is(err, noPorts) {
+		t.Errorf("dial: %v", err)
+	}
+	var dialed net.Conn
+	socketPairDial = func(network, address string) (net.Conn, error) {
+		c, err := dial(network, address)
+		dialed = c
+		return c, err
+	}
+	// A deadline gone already: Accept times out at once.
+	socketPairWait = -time.Second
+	if _, _, err := socketPair(); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Errorf("accept: %v", err)
+	}
+	if dialed == nil {
+		t.Fatal("not dialed")
+	}
+	if _, err := dialed.Write([]byte("x")); !errors.Is(err, net.ErrClosed) {
+		t.Errorf("the dialed end is open: %v", err)
 	}
 }

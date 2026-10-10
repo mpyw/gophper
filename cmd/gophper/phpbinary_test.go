@@ -78,6 +78,17 @@ func TestPHPBinaryScriptErrors(t *testing.T) {
 	if err := os.WriteFile(file, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
+	// No path to gophper, or one that is gone.
+	executable := phpBinaryExecutable
+	phpBinaryExecutable = func() (string, error) { return "", errors.New("no path") }
+	_, noPath := phpBinaryScript(file, nil)
+	noArgs := phpBinaryArgs()
+	phpBinaryExecutable = func() (string, error) { return filepath.Join(file, "gone"), nil }
+	_, gone := phpBinaryScript(file, nil)
+	phpBinaryExecutable = executable
+	if noPath == nil || gone == nil || noArgs != nil {
+		t.Errorf("no path: %v; gone: %v; args %q", noPath, gone, noArgs)
+	}
 	// A cache directory that is a file.
 	if _, err := phpBinaryScript(file, nil); err == nil {
 		t.Error("a file as the cache directory was accepted")

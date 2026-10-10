@@ -93,6 +93,11 @@ func dnsBuildQuery(name string, class, typ uint16) ([]byte, uint16, error) {
 		p = append(p, label...)
 	}
 	p = append(p, 0)
+	// At most 255 bytes on the wire (RFC 1035). A longer name would also
+	// overflow the two-byte length of a query over TCP.
+	if len(p)-12 > 255 {
+		return nil, 0, errors.New("hostnet: DNS name too long")
+	}
 	p = binary.BigEndian.AppendUint16(p, typ)
 	p = binary.BigEndian.AppendUint16(p, class)
 	return p, id, nil

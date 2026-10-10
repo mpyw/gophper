@@ -221,7 +221,7 @@ The web server chooses the script, as with php-fpm.
 
 | Option | Meaning | php-fpm equivalent |
 | --- | --- | --- |
-| `--listen ADDR` | TCP address, or `unix:/path/to.sock`. Default: `127.0.0.1:9000` | `listen` |
+| `--listen ADDR` | TCP address, or `unix:/path/to.sock`. Default: `127.0.0.1:9000`. Linux abstract sockets (`unix:@name`) are refused, as they have no permissions | `listen` |
 | `--listen-mode MODE` | Permissions of a Unix socket. Default: `0660` | `listen.mode` |
 | `--allowed-clients ADDR` | An address or prefix that may connect over TCP. Repeatable. Default: any | `listen.allowed_clients` |
 | `--limit-extensions EXT` | An extension a script may have. Repeatable. Default: `.php` and `.phar` | `security.limit_extensions` |

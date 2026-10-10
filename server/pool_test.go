@@ -383,3 +383,38 @@ func TestPoolRunAfterClose(t *testing.T) {
 		t.Errorf("%d workers", len(p.workers.all))
 	}
 }
+
+// TestPoolWorkerDirFails: when the workers' directory cannot be made, the
+// ini directory made before it goes too.
+func TestPoolWorkerDirFails(t *testing.T) {
+	engine, err := gophper.NewEngine(context.Background(), gophper.DefaultEngineConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = engine.Close(context.Background()) }()
+	mkdirTemp := poolMkdirTemp
+	t.Cleanup(func() { poolMkdirTemp = mkdirTemp })
+	full := errors.New("no space left")
+	var made []string
+	poolMkdirTemp = func(dir, pattern string) (string, error) {
+		if pattern == "gophper-w" {
+			return "", full
+		}
+		d, err := mkdirTemp(dir, pattern)
+		made = append(made, d)
+		return d, err
+	}
+	cfg := PHPConfig{Mounts: []Mount{{Dir: t.TempDir()}}, TempDir: t.TempDir(), OpcacheDir: t.TempDir(), ErrorLog: io.Discard}
+	if p, err := newPool(engine, cfg, nil); !errors.Is(err, full) {
+		if p != nil {
+			_ = p.close()
+		}
+		t.Errorf("err = %v", err)
+	}
+	if len(made) != 1 {
+		t.Fatalf("made %q", made)
+	}
+	if _, err := os.Stat(made[0]); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the ini directory is left: %v", err)
+	}
+}

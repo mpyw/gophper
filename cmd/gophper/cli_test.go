@@ -757,6 +757,23 @@ func TestCLIEngineErrors(t *testing.T) {
 	}
 }
 
+// TestCLIFastCGIAbstractSocket refuses Linux's abstract sockets, which
+// --listen-mode cannot restrict, and leaves a file of that name alone.
+func TestCLIFastCGIAbstractSocket(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("@name is a file name here")
+	}
+	dir := t.TempDir()
+	cliWrite(t, filepath.Join(dir, "@gophper-test"), "kept")
+	_, errOut, code := cliRun(t, dir, "", "fcgi", "--listen", "unix:@gophper-test")
+	if code != 1 || !strings.Contains(errOut, "abstract socket") {
+		t.Errorf("exit %d: %s", code, errOut)
+	}
+	if b, err := os.ReadFile(filepath.Join(dir, "@gophper-test")); err != nil || string(b) != "kept" {
+		t.Errorf("the file: %q, %v", b, err)
+	}
+}
+
 // TestCLIPHPBrokenBinary fails a run whose php.wasm is not wasm, as a
 // cache directory with a damaged binary in it gives.
 func TestCLIPHPBrokenBinary(t *testing.T) {
