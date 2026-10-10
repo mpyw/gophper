@@ -103,6 +103,12 @@ func dnsBuildQuery(name string, class, typ uint16) ([]byte, uint16, error) {
 	return p, id, nil
 }
 
+// dnsDialTCP is a var so that a test can give dnsExchange a connection
+// that the server reset as it was made, which no test server can time.
+var dnsDialTCP = func(ctx context.Context, d *net.Dialer, address string) (net.Conn, error) {
+	return d.DialContext(ctx, "tcp", address)
+}
+
 // dnsExchange asks one server over UDP, and again over TCP when the answer
 // was cut short.
 func dnsExchange(ctx context.Context, server string, q []byte, id uint16) ([]byte, error) {
@@ -137,7 +143,7 @@ func dnsExchange(ctx context.Context, server string, q []byte, id uint16) ([]byt
 	}
 
 	// Truncated: TCP, with a two-byte length before each message.
-	tc, err := d.DialContext(ctx, "tcp", server)
+	tc, err := dnsDialTCP(ctx, &d, server)
 	if err != nil {
 		return nil, err
 	}

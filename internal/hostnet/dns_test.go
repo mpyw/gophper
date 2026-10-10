@@ -3,6 +3,7 @@ package hostnet
 import (
 	"context"
 	"encoding/binary"
+	"errors"
 	"io"
 	"net"
 	"slices"
@@ -127,6 +128,36 @@ func TestDNSBuildQuery(t *testing.T) {
 		if _, _, err := dnsBuildQuery(name, 1, 1); err == nil {
 			t.Errorf("dnsBuildQuery(%q) succeeded", name)
 		}
+	}
+}
+
+// errDNSReset is what a write to a connection the server reset reports.
+var errDNSReset = errors.New("connection reset")
+
+// dnsResetConn fails every write, as a connection the server reset does.
+type dnsResetConn struct{ net.Conn }
+
+func (dnsResetConn) Write([]byte) (int, error) { return 0, errDNSReset }
+
+// TestDNSExchangeTCPWriteFails: the query cannot be sent over TCP after a
+// truncated answer.
+func TestDNSExchangeTCPWriteFails(t *testing.T) {
+	q, id, err := dnsBuildQuery("example.com", 1, 1)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dial := dnsDialTCP
+	t.Cleanup(func() { dnsDialTCP = dial })
+	dnsDialTCP = func(ctx context.Context, d *net.Dialer, address string) (net.Conn, error) {
+		c, err := dial(ctx, d, address)
+		if err != nil {
+			return nil, err
+		}
+		return dnsResetConn{c}, nil
+	}
+	server := dnsTestServer(t, func(q []byte) [][]byte { return [][]byte{dnsTestAnswer(q, id, 0x02)} }, func([]byte) []byte { return nil })
+	if a, err := dnsExchange(context.Background(), server, q, id); !errors.Is(err, errDNSReset) {
+		t.Errorf("% x, %v", a, err)
 	}
 }
 
