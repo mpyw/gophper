@@ -278,59 +278,7 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 	defer inst.system.Close()
 	defer func() { err = errors.Join(err, inst.linker.Close(context.WithoutCancel(wctx))) }()
 
-	fs := opts.FS
-	if fs == nil {
-		fs = wazero.NewFSConfig()
-	}
-	fs = fs.WithFSMount(hostnet.SocketPlaceholderFS, hostnet.SocketPlaceholderDir).
-		// OPENSSLDIR: openssl.cnf and the CA bundle.
-		WithFSMount(phpwasm.SSL, "/etc/gophper/ssl")
-	if e.extensionDir != "" {
-		fs = fs.WithReadOnlyDirMount(e.extensionDir, engineExtensionDir)
-	}
-	if e.phpBinary != "" {
-		// PHP_BINARY is checked from inside, so its directory must be visible.
-		dir := filepath.Dir(e.phpBinary)
-		fs = fs.WithReadOnlyDirMount(dir, hostpath.Guest(dir))
-		argv0 = hostpath.Guest(e.phpBinary)
-	} else {
-		// A bare name sends PHP looking in PATH, where it found the host's
-		// own php: Composer would then run another PHP. A path to nothing
-		// leaves PHP_BINARY empty.
-		argv0 = path.Join(hostnet.SocketPlaceholderDir, argv0)
-	}
-
-	mc := wazero.NewModuleConfig().
-		// _start is called below, once the interrupt flags are located.
-		WithStartFunctions().
-		// An empty name lets many instances run at the same time.
-		WithName("").
-		WithArgs(append([]string{argv0}, opts.Args...)...).
-		WithSysWalltime().
-		WithSysNanotime().
-		WithNanosleep(inst.vm.Nanosleep).
-		WithRandSource(engineRandSource{}).
-		WithFSConfig(fs)
-	if opts.Stdin != nil {
-		mc = mc.WithStdin(opts.Stdin)
-	}
-	if opts.Stdout != nil {
-		mc = mc.WithStdout(opts.Stdout)
-	}
-	if opts.Stderr != nil {
-		mc = mc.WithStderr(opts.Stderr)
-	}
-	for _, kv := range opts.Env {
-		// GOPHPER_CWD is Dir's, never Env's: php-cgi looks for php.ini in
-		// the working directory too, so it could load another one.
-		if k, v, ok := strings.Cut(kv, "="); ok && k != "GOPHPER_CWD" {
-			mc = mc.WithEnv(k, v)
-		}
-	}
-	if opts.Dir != "" {
-		// Read by a constructor in gophper-wasm's compat/, before main().
-		mc = mc.WithEnv("GOPHPER_CWD", opts.Dir)
-	}
+	mc := e.moduleConfig(argv0, opts, inst)
 
 	// The VM allocates the linear memory, so that an interrupt can write
 	// to it while the module grows it.
@@ -367,6 +315,73 @@ func (e *Engine) run(ctx context.Context, compiled func() (wazero.CompiledModule
 		err = ctx.Err()
 	}
 	return code, err
+}
+
+// moduleConfig configures the instance of one run: its arguments, stdio,
+// environment and file system.
+func (e *Engine) moduleConfig(argv0 string, opts Options, inst *engineInstance) wazero.ModuleConfig {
+	mc := wazero.NewModuleConfig().
+		// _start is called by run, once the interrupt flags are located.
+		WithStartFunctions().
+		// An empty name lets many instances run at the same time.
+		WithName("").
+		WithArgs(append([]string{e.guestArgv0(argv0)}, opts.Args...)...).
+		WithSysWalltime().
+		WithSysNanotime().
+		WithNanosleep(inst.vm.Nanosleep).
+		WithRandSource(engineRandSource{}).
+		WithFSConfig(e.fsConfig(opts.FS))
+	if opts.Stdin != nil {
+		mc = mc.WithStdin(opts.Stdin)
+	}
+	if opts.Stdout != nil {
+		mc = mc.WithStdout(opts.Stdout)
+	}
+	if opts.Stderr != nil {
+		mc = mc.WithStderr(opts.Stderr)
+	}
+	for _, kv := range opts.Env {
+		// GOPHPER_CWD is Dir's, never Env's: php-cgi looks for php.ini in
+		// the working directory too, so it could load another one.
+		if k, v, ok := strings.Cut(kv, "="); ok && k != "GOPHPER_CWD" {
+			mc = mc.WithEnv(k, v)
+		}
+	}
+	if opts.Dir != "" {
+		// Read by a constructor in gophper-wasm's compat/, before main().
+		mc = mc.WithEnv("GOPHPER_CWD", opts.Dir)
+	}
+	return mc
+}
+
+// fsConfig adds what every run sees to fs, the caller's file system.
+func (e *Engine) fsConfig(fs wazero.FSConfig) wazero.FSConfig {
+	if fs == nil {
+		fs = wazero.NewFSConfig()
+	}
+	fs = fs.WithFSMount(hostnet.SocketPlaceholderFS, hostnet.SocketPlaceholderDir).
+		// OPENSSLDIR: openssl.cnf and the CA bundle.
+		WithFSMount(phpwasm.SSL, "/etc/gophper/ssl")
+	if e.extensionDir != "" {
+		fs = fs.WithReadOnlyDirMount(e.extensionDir, engineExtensionDir)
+	}
+	if e.phpBinary != "" {
+		// PHP_BINARY is checked from inside, so its directory must be visible.
+		dir := filepath.Dir(e.phpBinary)
+		fs = fs.WithReadOnlyDirMount(dir, hostpath.Guest(dir))
+	}
+	return fs
+}
+
+// guestArgv0 is PHP's argv[0], from which it finds PHP_BINARY.
+func (e *Engine) guestArgv0(argv0 string) string {
+	if e.phpBinary != "" {
+		return hostpath.Guest(e.phpBinary)
+	}
+	// A bare name sends PHP looking in PATH, where it found the host's own
+	// php: Composer would then run another PHP. A path to nothing leaves
+	// PHP_BINARY empty.
+	return path.Join(hostnet.SocketPlaceholderDir, argv0)
 }
 
 // engineExtensionDir is php.wasm's extension_dir (gophper-wasm's ABI.md).

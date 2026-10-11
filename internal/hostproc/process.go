@@ -131,59 +131,18 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 		return wasi.EPERM
 	}
 	mem := m.Memory()
-	read := func(ptr, n uint32) string {
-		b, _ := mem.Read(ptr, n)
-		return string(b)
-	}
-	path := read(pathPtr, pathLen)
-	argv := processSplitNUL(read(argvPtr, argvLen))
-	env := processWithBinDir(processSplitNUL(read(envpPtr, envpLen)), p.binDir)
-	guestCwd := read(cwdPtr, cwdLen)
+	argv := processSplitNUL(processReadString(mem, argvPtr, argvLen))
+	env := processWithBinDir(processSplitNUL(processReadString(mem, envpPtr, envpLen)), p.binDir)
+	guestCwd := processReadString(mem, cwdPtr, cwdLen)
 	cwd, _, ok := p.hostPath(guestCwd)
 	if !ok {
 		// The working directory has no host directory behind it.
 		return wasi.ENOENT
 	}
 
-	cmd, ok := processShell(path, argv)
-	if !ok {
-		var name string
-		if strings.Contains(path, "/") {
-			// A path, not a name to look up: PHP's, which is the host's
-			// only on Unix. On Windows, /c/app/x.exe is C:\app\x.exe,
-			// which has no slash to tell it from a name.
-			if !strings.HasPrefix(path, "/") {
-				path = pathpkg.Join(guestCwd, path)
-			}
-			host, _, ok := p.hostPath(path)
-			if !ok {
-				// Outside what PHP may read, such as /bin/sh in serve. A
-				// child runs on the host anyway, with gophper's rights, so
-				// it is found as the CLI would find it.
-				if host, ok = hostpath.Host(path); !ok {
-					return wasi.ENOENT
-				}
-			}
-			name = host
-		} else {
-			var err error
-			if name, err = processResolve(path, search != 0, cwd, env); err != nil {
-				return errnoFrom(err)
-			}
-		}
-		// What Windows runs: os/exec would add an extension later, past
-		// the check below.
-		name, err := processFinalPath(name)
-		if err != nil {
-			return errnoFrom(err)
-		}
-		if !processBatchSafe(name, argv) {
-			return wasi.EINVAL
-		}
-		cmd = &exec.Cmd{Path: name, Args: argv}
-		if len(cmd.Args) == 0 {
-			cmd.Args = []string{path}
-		}
+	cmd, errno := p.command(processReadString(mem, pathPtr, pathLen), argv, env, guestCwd, cwd, search != 0)
+	if errno != 0 {
+		return errno
 	}
 	cmd.Env, cmd.Dir = env, cwd
 
@@ -194,82 +153,12 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 		}
 	}()
 	for i := range nfds {
-		base := fdsPtr + uint32(i)*processChildFDSize
-		fd, kind, value, flags := processReadI32(mem, base), processReadI32(mem, base+4), processReadI32(mem, base+8), processReadI32(mem, base+12)
-		fpath := read(uint32(processReadI32(mem, base+16)), uint32(processReadI32(mem, base+20)))
-
-		var r io.Reader
-		var w io.Writer
-		var f *os.File
-		switch kind {
-		case processChildHost:
-			hf, done, err := p.sockets.ChildFile(value)
-			if err != nil {
-				return wasi.EBADF
-			}
+		done, errno := p.attachChildFD(cmd, mem, fdsPtr+uint32(i)*processChildFDSize)
+		if done != nil {
 			release = append(release, done)
-			f = hf
-		case processChildStdio:
-			switch value {
-			case 0:
-				if sf, ok := p.stdin.(*os.File); ok {
-					r = sf
-				} else if p.stdin != nil {
-					// No file to share, as a real fd would be. Feeding a
-					// pipe from it would take what the child never reads,
-					// and PHP would lose it. The child reads nothing, as a
-					// php-fpm child does.
-					null, err := os.Open(os.DevNull)
-					if err != nil {
-						return errnoFrom(err)
-					}
-					release = append(release, func() { _ = null.Close() }) // the child has its own copy
-					r = null
-				}
-			case 1:
-				w = p.stdout.writer()
-			case 2:
-				w = p.stderr.writer()
-			default:
-				return wasi.EBADF
-			}
-		case processChildFile:
-			host, writable, ok := p.hostPath(fpath)
-			switch {
-			case !ok:
-				return wasi.EBADF
-			case !writable && flags&processOpenWrite != 0:
-				return wasi.EACCES
-			}
-			of, err := os.OpenFile(host, processOpenFlags(flags), 0o666)
-			if err != nil {
-				return errnoFrom(err)
-			}
-			release = append(release, func() { _ = of.Close() }) // Only our copy; its error changes nothing.
-			f = of
-		default:
-			return wasi.EINVAL
 		}
-		if f != nil {
-			r, w = f, f
-		}
-
-		switch fd {
-		case 0:
-			cmd.Stdin = r
-		case 1:
-			cmd.Stdout = w
-		case 2:
-			cmd.Stderr = w
-		default:
-			if f == nil {
-				// os/exec passes only files above stderr.
-				return wasi.EBADF
-			}
-			for len(cmd.ExtraFiles) < int(fd)-2 {
-				cmd.ExtraFiles = append(cmd.ExtraFiles, nil)
-			}
-			cmd.ExtraFiles[fd-3] = f
+		if errno != 0 {
+			return errno
 		}
 	}
 
@@ -294,6 +183,152 @@ func (x processExports) spawn(ctx context.Context, m api.Module,
 	}()
 	mem.WriteUint32Le(pidPtr, uint32(pid))
 	return 0
+}
+
+// command returns what spawn starts for path: a shell, or the program path
+// names. guestCwd is the working directory as PHP sees it, and cwd is the
+// host directory behind it. On failure, it returns a WASI errno.
+func (p *Processes) command(path string, argv, env []string, guestCwd, cwd string, search bool) (*exec.Cmd, int32) {
+	if cmd, ok := processShell(path, argv); ok {
+		return cmd, 0
+	}
+	name, errno := p.programPath(path, guestCwd, cwd, search, env)
+	if errno != 0 {
+		return nil, errno
+	}
+	// What Windows runs: os/exec would add an extension later, past
+	// the check below.
+	name, err := processFinalPath(name)
+	if err != nil {
+		return nil, errnoFrom(err)
+	}
+	if !processBatchSafe(name, argv) {
+		return nil, wasi.EINVAL
+	}
+	cmd := &exec.Cmd{Path: name, Args: argv}
+	if len(cmd.Args) == 0 {
+		cmd.Args = []string{path}
+	}
+	return cmd, 0
+}
+
+// programPath finds the host program that path names.
+func (p *Processes) programPath(path, guestCwd, cwd string, search bool, env []string) (string, int32) {
+	if !strings.Contains(path, "/") {
+		name, err := processResolve(path, search, cwd, env)
+		if err != nil {
+			return "", errnoFrom(err)
+		}
+		return name, 0
+	}
+	// A path, not a name to look up: PHP's, which is the host's only on
+	// Unix. On Windows, /c/app/x.exe is C:\app\x.exe, which has no slash
+	// to tell it from a name.
+	if !strings.HasPrefix(path, "/") {
+		path = pathpkg.Join(guestCwd, path)
+	}
+	if host, _, ok := p.hostPath(path); ok {
+		return host, 0
+	}
+	// Outside what PHP may read, such as /bin/sh in serve. A child runs on
+	// the host anyway, with gophper's rights, so it is found as the CLI
+	// would find it.
+	if host, ok := hostpath.Host(path); ok {
+		return host, 0
+	}
+	return "", wasi.ENOENT
+}
+
+// attachChildFD connects one fd of cmd as the struct gophper_child_fd at
+// base describes. done, if not nil, releases what it opened once the
+// child has started, or failed to.
+func (p *Processes) attachChildFD(cmd *exec.Cmd, mem api.Memory, base uint32) (done func(), errno int32) {
+	fd := processReadI32(mem, base)
+	kind := processReadI32(mem, base+4)
+	value := processReadI32(mem, base+8)
+	flags := processReadI32(mem, base+12)
+
+	var r io.Reader
+	var w io.Writer
+	var f *os.File
+	switch kind {
+	case processChildHost:
+		hf, release, err := p.sockets.ChildFile(value)
+		if err != nil {
+			return nil, wasi.EBADF
+		}
+		f, done = hf, release
+	case processChildStdio:
+		r, w, done, errno = p.childStdio(value)
+		if errno != 0 {
+			return done, errno
+		}
+	case processChildFile:
+		path := processReadString(mem, uint32(processReadI32(mem, base+16)), uint32(processReadI32(mem, base+20)))
+		host, writable, ok := p.hostPath(path)
+		switch {
+		case !ok:
+			return nil, wasi.EBADF
+		case !writable && flags&processOpenWrite != 0:
+			return nil, wasi.EACCES
+		}
+		of, err := os.OpenFile(host, processOpenFlags(flags), 0o666)
+		if err != nil {
+			return nil, errnoFrom(err)
+		}
+		f, done = of, func() { _ = of.Close() } // Only our copy; its error changes nothing.
+	default:
+		return nil, wasi.EINVAL
+	}
+	if f != nil {
+		r, w = f, f
+	}
+
+	switch fd {
+	case 0:
+		cmd.Stdin = r
+	case 1:
+		cmd.Stdout = w
+	case 2:
+		cmd.Stderr = w
+	default:
+		if f == nil {
+			// os/exec passes only files above stderr.
+			return done, wasi.EBADF
+		}
+		for len(cmd.ExtraFiles) < int(fd)-2 {
+			cmd.ExtraFiles = append(cmd.ExtraFiles, nil)
+		}
+		cmd.ExtraFiles[fd-3] = f
+	}
+	return done, 0
+}
+
+// childStdio returns what a child gets for the instance's stdio fd n.
+func (p *Processes) childStdio(n int32) (r io.Reader, w io.Writer, done func(), errno int32) {
+	switch n {
+	case 0:
+		if sf, ok := p.stdin.(*os.File); ok {
+			return sf, nil, nil, 0
+		}
+		if p.stdin == nil {
+			return nil, nil, nil, 0
+		}
+		// No file to share, as a real fd would be. Feeding a pipe from it
+		// would take what the child never reads, and PHP would lose it. The
+		// child reads nothing, as a php-fpm child does.
+		null, err := os.Open(os.DevNull)
+		if err != nil {
+			return nil, nil, nil, errnoFrom(err)
+		}
+		return null, nil, func() { _ = null.Close() }, 0 // the child has its own copy
+	case 1:
+		return nil, p.stdout.writer(), nil, 0
+	case 2:
+		return nil, p.stderr.writer(), nil, 0
+	default:
+		return nil, nil, nil, wasi.EBADF
+	}
 }
 
 // wait reaps pid, or any child for -1. It returns the pid, 0 when nohang
@@ -442,6 +477,12 @@ func processSplitNUL(s string) []string {
 		return nil
 	}
 	return strings.Split(strings.TrimSuffix(s, "\x00"), "\x00")
+}
+
+// processReadString reads n bytes at ptr. A range outside memory reads as "".
+func processReadString(mem api.Memory, ptr, n uint32) string {
+	b, _ := mem.Read(ptr, n)
+	return string(b)
 }
 
 func processReadI32(mem api.Memory, ptr uint32) int32 {
