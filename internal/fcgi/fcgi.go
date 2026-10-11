@@ -210,18 +210,28 @@ func (c *serverConn) serve(ctx context.Context, h Handler) {
 		}
 	}()
 
+	// finished clears cur once its handler is done. It reports whether the
+	// connection ends with it, drained.
+	finished := func() bool {
+		if cur == nil || !cur.started {
+			return false
+		}
+		select {
+		case <-cur.done:
+		default:
+			return false
+		}
+		keep := cur.keepConn
+		cur = nil
+		if !keep {
+			c.drain()
+		}
+		return !keep
+	}
+
 	for {
-		if cur != nil && cur.started {
-			select {
-			case <-cur.done:
-				keep := cur.keepConn
-				cur = nil
-				if !keep {
-					c.drain()
-					return
-				}
-			default:
-			}
+		if finished() {
+			return
 		}
 
 		if cur == nil && !c.readDeadline(time.Now().Add(serverIdle)) {
@@ -241,15 +251,8 @@ func (c *serverConn) serve(ctx context.Context, h Handler) {
 				c.mu.Lock()
 				c.mu.Unlock() //nolint:staticcheck // A barrier: it waits for handle to release mu.
 			}
-			select {
-			case <-cur.done:
-				keep := cur.keepConn
-				cur = nil
-				if !keep {
-					c.drain()
-					return
-				}
-			default:
+			if finished() {
+				return
 			}
 		}
 
