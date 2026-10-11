@@ -1,7 +1,7 @@
 # gophper examples
 
 A Go module of its own, so that the root module does not depend on anything here.
-It uses the released `github.com/mpyw/gophper`.
+It uses the gophper in the parent directory, through a `replace` in `go.mod`.
 Its path, `example/gophper`, is outside `github.com/mpyw/gophper`, so it cannot import gophper's `internal/` packages.
 Run each command from this directory.
 

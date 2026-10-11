@@ -111,7 +111,7 @@ gophper fcgi --listen unix:/run/gophper.sock --mount /var/www -d max_execution_t
 
 ## Examples
 
-[`examples/`](examples) is a Go module of its own. It uses the released gophper.
+[`examples/`](examples) is a Go module of its own. It uses the gophper in this repository.
 
 | Example | What it shows |
 | --- | --- |
