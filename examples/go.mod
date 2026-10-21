@@ -1,6 +1,6 @@
 module example/gophper
 
-go 1.27.1
+go 1.27.3
 
 require (
 	github.com/mpyw/gophper v0.1.0
@@ -8,7 +8,7 @@ require (
 )
 
 require (
-	github.com/mpyw/gophper-wasm v0.2.3 // indirect
+	github.com/mpyw/gophper-wasm v0.2.4 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 )
 

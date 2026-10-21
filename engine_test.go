@@ -425,9 +425,9 @@ func TestTimeoutOnOneProcessor(t *testing.T) {
 	}
 }
 
-// TestEngineMemoryLimit ends a script that needs more than MemoryLimit
-// with "Out of memory", which memory_limit cannot lift. The Go process goes
-// on, and the next run is not limited.
+// TestEngineMemoryLimit aborts a script that needs more than MemoryLimit,
+// which memory_limit cannot lift: PHP prints "Out of memory" and the run
+// returns an error. The Go process goes on, and the next run is not limited.
 func TestEngineMemoryLimit(t *testing.T) {
 	e := newTestEngine(t)
 	var out bytes.Buffer
@@ -437,7 +437,7 @@ func TestEngineMemoryLimit(t *testing.T) {
 		Stderr:      &out,
 		MemoryLimit: 96 << 20,
 	})
-	if err != nil || code != 255 || !strings.Contains(out.String(), "Fatal error: Out of memory") || strings.Contains(out.String(), "done") {
+	if err == nil || !strings.Contains(out.String(), "Out of memory") || strings.Contains(out.String(), "done") {
 		t.Errorf("exit %d, %v\n%s", code, err, out.String())
 	}
 	// More than the limit above, under php.ini's own 128M.

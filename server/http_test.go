@@ -614,9 +614,10 @@ func TestHTTPNetworkAndMemory(t *testing.T) {
 		if _, body := get(t, srv.URL+"/net.php"); body != tt.want {
 			t.Errorf("NoNetwork %v: %q, want %q", tt.noNetwork, body, tt.want)
 		}
-		// A fatal error, which php-cgi shows with display_errors on.
-		if _, body := get(t, srv.URL+"/big.php"); !strings.Contains(body, "Out of memory") || strings.Contains(body, "209715200") {
-			t.Errorf("past MemoryLimit: %q", body)
+		// PHP aborts at the cap, so the worker is replaced and the request
+		// ends with 502.
+		if res, body := get(t, srv.URL+"/big.php"); res.StatusCode != http.StatusBadGateway || strings.Contains(body, "209715200") {
+			t.Errorf("past MemoryLimit: %d %q", res.StatusCode, body)
 		}
 		if _, body := get(t, srv.URL+"/ok.php"); body != "ok" {
 			t.Errorf("after: %q", body)
