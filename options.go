@@ -38,9 +38,11 @@ type Options struct {
 	// HostPath instead, as files do.
 	Network bool
 	// MemoryLimit caps PHP's linear memory, in bytes: its code and data as
-	// well as what the script allocates. A script that needs more ends with
-	// "Out of memory", which memory_limit cannot lift. Zero means none
-	// below WebAssembly's own 4 GiB.
+	// well as what the script allocates. memory_limit cannot lift it. A
+	// script that needs more makes PHP print "Out of memory" and abort, and
+	// the run returns an error. PHP aborts on purpose, since 8.6.0RC4: going
+	// on after a failed allocation was CVE-2026-109618. Zero means none below
+	// WebAssembly's own 4 GiB.
 	MemoryLimit int64
 	// Functions are PHP functions written in Go, by name. Each becomes an
 	// internal function, which a script calls as any other.

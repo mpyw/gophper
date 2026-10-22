@@ -169,7 +169,7 @@ PHP gets nothing of the host unless `Options` says so:
 | `HostPath` | Maps a path inside PHP to its host file, for permissions, owners, locks and child processes | No path has a host file |
 | `Processes` | PHP may start host programs. A child shares a `Stdin` that is a file. For any other, it reads nothing, so PHP keeps it all. | `proc_open` and the rest fail |
 | `Network` | PHP may use TCP, UDP and DNS, as the Go process can. Unix sockets go through `HostPath` instead. | Connections and servers fail with "Permission denied", and lookups fail |
-| `MemoryLimit` | Caps PHP's memory in bytes, its own code and data included. `memory_limit` cannot lift it. | WebAssembly's 4 GiB |
+| `MemoryLimit` | Caps PHP's memory in bytes, its own code and data included. `memory_limit` cannot lift it. At the cap, PHP prints `Out of memory` and aborts, and the run returns an error. Set `memory_limit` below the cap to get PHP's own fatal error instead. | WebAssembly's 4 GiB |
 | `Signals` | Signals for PHP, as from `signal.Notify`. Handled ones run the `pcntl` handler. The rest end the run with exit code 128 plus the signal number. | No signals |
 
 > [!NOTE]
@@ -354,7 +354,7 @@ example.com {
 | `--temp-dir DIR` | Mounted at `/tmp` inside PHP. Default: the system's. In Go, `TempDir` must be an absolute path. | |
 | `--no-processes` | Stops PHP from starting host programs (`proc_open`, `exec` and the rest) | `disable_functions` |
 | `--no-network` | Stops PHP from using TCP, UDP and DNS. Unix sockets inside the mounts still work. | |
-| `--memory-max SIZE` | Caps each PHP instance's memory, such as `512M`. `memory_limit` cannot lift it. A worker's opcache takes 64 MB of it, so a worker needs about 96M. serve and fcgi refuse a cap PHP cannot start under. Default: none | |
+| `--memory-max SIZE` | Caps each PHP instance's memory, such as `512M`. `memory_limit` cannot lift it. At the cap, PHP aborts, and serve and fcgi replace the worker. A worker's opcache takes 64 MB of it, so a worker needs about 96M. serve and fcgi refuse a cap PHP cannot start under. Default: none | |
 | `--no-workers` | Starts a fresh PHP instance for each request | |
 | `--max-requests N` | Requests a worker serves before it is replaced. Default: 500 | `pm.max_requests` |
 | `--opcache-dir DIR` | Where opcache keeps compiled scripts between requests. Default: the user cache directory | |
