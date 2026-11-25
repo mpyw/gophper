@@ -85,7 +85,9 @@ expect "php absolute script" "$want_cli" "$(run php "$(native "$work/app/main.ph
 log=$work/serve.log
 (cd "$work/app" && exec "$bin" serve --root public --listen 127.0.0.1:0) 2>"$log" &
 pid=$!
-trap 'kill "$pid" 2>/dev/null || true; rm -rf "$work"' EXIT
+# Wait for serve to exit first: Windows cannot remove its working directory
+# while it runs. A leftover temporary directory fails no test.
+trap 'kill "$pid" 2>/dev/null || true; wait "$pid" 2>/dev/null || true; rm -rf "$work" || true' EXIT
 addr=
 for _ in $(seq 1 180); do
   addr=$(tr -d '\r' <"$log" | sed -nE 's#.*serving .* on http://([^ ]+).*#\1#p' | head -n1)
