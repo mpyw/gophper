@@ -1,0 +1,111 @@
+name: Release smoke test
+
+# Runs the binaries of a published release, as users download them. test.yml
+# runs a binary that go build made on each runner; this runs the one that
+# goreleaser cross-compiled on Linux.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release to test (e.g., v1.2.3). Empty means the latest release."
+        required: false
+        type: string
+      platform:
+        description: "Platform to test"
+        required: true
+        type: choice
+        default: all
+        options:
+          - all
+          - windows/amd64
+          - windows/arm64
+          - linux/amd64
+          - linux/arm64
+          - darwin/amd64
+          - darwin/arm64
+
+permissions:
+  contents: read
+
+jobs:
+  setup:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+      matrix: ${{ steps.matrix.outputs.matrix }}
+    steps:
+      - name: Resolve version
+        id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ inputs.version }}
+        run: |
+          if [[ -z "$VERSION" ]]; then
+            VERSION=$(gh release view -R "$GITHUB_REPOSITORY" --json tagName --jq .tagName)
+          fi
+          if [[ ! "$VERSION" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Invalid version format '$VERSION', expected vX.Y.Z"
+            exit 1
+          fi
+          echo "Testing $VERSION"
+          echo "version=$VERSION" >>"$GITHUB_OUTPUT"
+
+      # One runner per platform of .goreleaser.yaml, on its own OS and CPU.
+      - name: Select platforms
+        id: matrix
+        env:
+          PLATFORM: ${{ inputs.platform }}
+        run: |
+          all='[
+            {"platform":"windows/amd64","os":"windows-2025","ext":"zip"},
+            {"platform":"windows/arm64","os":"windows-11-arm","ext":"zip"},
+            {"platform":"linux/amd64","os":"ubuntu-24.04","ext":"tar.gz"},
+            {"platform":"linux/arm64","os":"ubuntu-24.04-arm","ext":"tar.gz"},
+            {"platform":"darwin/amd64","os":"macos-15-intel","ext":"tar.gz"},
+            {"platform":"darwin/arm64","os":"macos-15","ext":"tar.gz"}
+          ]'
+          matrix=$(jq -c --arg p "$PLATFORM" '{include: [.[] | select($p == "all" or .platform == $p)]}' <<<"$all")
+          echo "matrix=$matrix" >>"$GITHUB_OUTPUT"
+
+  smoke:
+    needs: setup
+    name: smoke (${{ matrix.platform }})
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.setup.outputs.matrix) }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: bash
+    env:
+      VERSION: ${{ needs.setup.outputs.version }}
+    steps:
+      # The smoke script comes from the branch the workflow runs on, the
+      # binary from the release.
+      - uses: actions/checkout@v7
+
+      - name: Download release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          asset="gophper_${VERSION#v}_${PLATFORM%/*}_${PLATFORM#*/}.${{ matrix.ext }}"
+          gh release download "$VERSION" -R "$GITHUB_REPOSITORY" -p "$asset" -D "$RUNNER_TEMP/release"
+          echo "ASSET=$RUNNER_TEMP/release/$asset" >>"$GITHUB_ENV"
+
+      # Git Bash's tar cannot read zip files.
+      - name: Extract (zip)
+        if: matrix.ext == 'zip'
+        shell: pwsh
+        run: Expand-Archive -Path $env:ASSET -DestinationPath "$env:RUNNER_TEMP/gophper"
+
+      - name: Extract (tar.gz)
+        if: matrix.ext == 'tar.gz'
+        run: mkdir -p "$RUNNER_TEMP/gophper" && tar -xzf "$ASSET" -C "$RUNNER_TEMP/gophper"
+
+      - name: Smoke test
+        run: |
+          bin="$RUNNER_TEMP/gophper/gophper"
+          [[ "$RUNNER_OS" == Windows ]] && bin+=.exe
+          ./.github/release-smoke.sh "$bin" "$VERSION"
