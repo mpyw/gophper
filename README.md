@@ -211,7 +211,7 @@ Releases cover macOS, Linux and Windows, each on amd64 and arm64.
 
 ```console
 $ gophper --version
-gophper version v0.1.0 (PHP 8.6.0RC3, gophper-wasm v0.2.3, wazero v1.12.0, go1.27.1 darwin/arm64)
+gophper version v0.1.0 (PHP 8.6.0, gophper-wasm v0.2.5, wazero v1.12.0, go1.27.1 darwin/arm64)
 ```
 
 ### Commands
