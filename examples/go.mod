@@ -8,7 +8,7 @@ require (
 )
 
 require (
-	github.com/mpyw/gophper-wasm v0.2.4 // indirect
+	github.com/mpyw/gophper-wasm v0.2.5 // indirect
 	golang.org/x/sys v0.48.0 // indirect
 )
 
